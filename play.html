@@ -124,7 +124,7 @@ document.getElementById('start-btn').onclick = async () => {
     document.getElementById('start-btn').disabled = false;
     return;
   }
-  if (mine && mine.status === 'in_progress') {
+  if (mine) {
     // Choix : une tentative en cours (page rechargee, pas annulee) est reprise
     // la ou elle en etait, au lieu d'etre bloquee. Les reponses deja envoyees
     // sont conservees, les questions restantes sont re-melangees.
