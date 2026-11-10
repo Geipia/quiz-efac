@@ -1,4 +1,4 @@
-// Configuration QuizLive - Quiz en classe EFAC
+// Configuration QuizLive - Quiz en classe EPHEC
 // La cle anon Supabase est publique par conception (securite geree cote base par RLS).
 const CONFIG = {
   SUPABASE_URL: "https://uyywaqekatcnpuudklfn.supabase.co",
