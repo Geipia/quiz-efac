@@ -4,6 +4,8 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>QuizLive - Repondre au quiz</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,700;12..96,800&family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<meta name="theme-color" content="#fbf8f3">
 <link rel="stylesheet" href="style.css">
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
 <script src="config.js"></script>
@@ -39,7 +41,7 @@
     <div id="resume-note" class="msg info hidden">Reprise de votre tentative en cours : vos reponses deja envoyees sont conservees.</div>
     <p class="progress-line" id="progress"></p>
     <div class="card">
-      <h1 id="qtext" style="font-size:1.2rem"></h1>
+      <h1 id="qtext"></h1>
       <div id="choices"></div>
     </div>
     <p class="sub" style="font-size:.85rem">Restez sur cette page. Quitter l'onglet ou la fenetre plus de 3 secondes annule votre tentative.</p>
@@ -56,9 +58,9 @@
   <!-- Annule -->
   <div id="cancelled" class="hidden center">
     <div class="alert-card">
-      <h1 style="color:#fecaca">Tentative annulee</h1>
+      <h1 style="color:inherit">Tentative annulee</h1>
       <p id="cancel-reason"></p>
-      <p class="sub" style="color:#fca5a5">Votre professeur a recu une alerte avec votre identite.</p>
+      <p class="sub" style="color:#b4384b">Votre professeur a recu une alerte avec votre identite.</p>
     </div>
   </div>
 </main>
