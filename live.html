@@ -190,9 +190,15 @@ async function maybeReopenAfterReload() {
   // Ne rouvrir que si ce chargement est vraiment un rechargement (F5) : un
   // retour volontaire via "Voir les resultats" dans les 15 s ne rouvre pas.
   const navType = (performance.getEntriesByType('navigation')[0] || {}).type;
-  if (navType === 'reload' && Date.now() - ts < 15000 && !sessionRow.open) {
+  if (navType !== 'reload' || Date.now() - ts >= 15000 || sessionRow.open) return;
+  // Le beacon de fermeture envoye au pagehide peut arriver APRES la
+  // reouverture (course reseau) : on rouvre puis on reverifie a 600 ms
+  // d'intervalle, jusqu'a 3 fois.
+  for (let i = 0; i < 3; i++) {
     await sb.from('sessions').update({ open: true }).eq('id', sessionId);
-    sessionRow.open = true;
+    await new Promise(r => setTimeout(r, 600));
+    const { data: check } = await sb.from('sessions').select('open').eq('id', sessionId).single();
+    if (check && check.open) { sessionRow.open = true; return; }
   }
 }
 
