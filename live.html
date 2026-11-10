@@ -52,6 +52,12 @@
 
     <div id="delete-zone" class="hidden" style="margin-top:28px;text-align:center">
       <button class="danger" id="delete-session">Supprimer cette session et ses resultats</button>
+      <div id="delete-confirm" class="hidden">
+        <p style="font-weight:600">Supprimer definitivement cette session et tous ses resultats ? Cette action est irreversible.</p>
+        <button class="danger" id="delete-yes">Oui, supprimer definitivement</button>
+        <button id="delete-no" style="margin-left:8px">Annuler</button>
+      </div>
+      <div id="delete-error" class="msg err hidden" style="margin-top:10px"></div>
       <p class="sub" style="font-size:.85rem">La session et tous ses resultats seront definitivement effaces de l'historique.</p>
     </div>
   </div>
@@ -142,15 +148,40 @@ document.getElementById('close-session').onclick = async () => {
 };
 
 // ---------- Suppression d'une session terminee ----------
-document.getElementById('delete-session').onclick = async () => {
-  if (!confirm('Supprimer definitivement cette session et tous ses resultats ? Cette action est irreversible.')) return;
-  const btn = document.getElementById('delete-session');
-  btn.disabled = true;
-  btn.textContent = 'Suppression...';
-  await sb.from('responses').delete().eq('session_id', sessionId);
-  await sb.from('alerts').delete().eq('session_id', sessionId);
-  await sb.from('attempts').delete().eq('session_id', sessionId);
-  await sb.from('sessions').delete().eq('id', sessionId);
+// Pas de confirm() natif : il est bloque ou ignore silencieusement dans
+// plusieurs contextes (onglet en arriere-plan, fenetre non focale,
+// automatisation), et le gestionnaire s'arretait alors sans aucun retour
+// visuel : aucun dialogue, aucune suppression. Confirmation inline a la place.
+document.getElementById('delete-session').onclick = () => {
+  document.getElementById('delete-session').classList.add('hidden');
+  document.getElementById('delete-confirm').classList.remove('hidden');
+};
+document.getElementById('delete-no').onclick = () => {
+  document.getElementById('delete-confirm').classList.add('hidden');
+  document.getElementById('delete-session').classList.remove('hidden');
+};
+document.getElementById('delete-yes').onclick = async () => {
+  const yes = document.getElementById('delete-yes');
+  const errBox = document.getElementById('delete-error');
+  yes.disabled = true;
+  yes.textContent = 'Suppression...';
+  errBox.classList.add('hidden');
+  const steps = [
+    ['responses', 'session_id'],
+    ['alerts', 'session_id'],
+    ['attempts', 'session_id'],
+    ['sessions', 'id']
+  ];
+  for (const [table, col] of steps) {
+    const { error } = await sb.from(table).delete().eq(col, sessionId);
+    if (error) {
+      errBox.textContent = 'Erreur pendant la suppression (' + table + ') : ' + error.message;
+      errBox.classList.remove('hidden');
+      yes.disabled = false;
+      yes.textContent = 'Oui, supprimer definitivement';
+      return;
+    }
+  }
   location.href = 'teacher.html';
 };
 
