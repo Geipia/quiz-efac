@@ -1,0 +1,216 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>QuizLive - Espace professeur</title>
+<link rel="stylesheet" href="style.css">
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
+<script src="config.js"></script>
+</head>
+<body>
+<header class="topbar">
+  <span class="brand">QuizLive - Professeur</span>
+  <a href="index.html">Accueil</a>
+</header>
+<main>
+
+  <!-- Ecran code d'acces -->
+  <div id="pin-gate" class="card" style="max-width:420px;margin:40px auto;">
+    <h1>Espace professeur</h1>
+    <p class="sub">Entrez le code d'acces.</p>
+    <label for="pin">Code</label>
+    <input type="password" id="pin" autocomplete="off">
+    <div id="pin-msg"></div>
+    <br>
+    <button id="pin-btn" style="width:100%">Entrer</button>
+  </div>
+
+  <div id="app" class="hidden">
+    <h1>Mes quiz</h1>
+    <p class="sub">Lancez un quiz pour afficher le QR code, ou creez-en un nouveau.</p>
+    <div id="quiz-list"><p class="sub">Chargement...</p></div>
+
+    <h2>Creer un quiz</h2>
+    <div class="tabs">
+      <button id="tab-form" class="on">Formulaire</button>
+      <button id="tab-json">JSON (Claude)</button>
+    </div>
+
+    <!-- Creation manuelle -->
+    <div id="pane-form" class="card">
+      <label for="quiz-title">Titre du quiz</label>
+      <input type="text" id="quiz-title" placeholder="Ex : Histoire - La Renaissance">
+      <div id="questions"></div>
+      <button class="secondary" id="add-q">+ Ajouter une question</button>
+      <br><br>
+      <button id="save-quiz">Enregistrer le quiz</button>
+      <div id="form-msg"></div>
+    </div>
+
+    <!-- Import JSON (Claude) -->
+    <div id="pane-json" class="card hidden">
+      <p class="sub">Collez ici le JSON produit par Claude. Le format exact et le prompt a donner a Claude sont sur la <a href="guide.html" style="color:var(--accent)">page guide</a>.</p>
+      <pre>{
+  "title": "Titre du quiz",
+  "questions": [
+    {
+      "text": "Texte de la question ?",
+      "choices": ["Choix A", "Choix B", "Choix C", "Choix D"],
+      "correct": 0
+    }
+  ]
+}</pre>
+      <label for="json-input">JSON du quiz</label>
+      <textarea id="json-input" placeholder='{"title":"...","questions":[...]}'></textarea>
+      <button id="import-json">Creer le quiz depuis ce JSON</button>
+      <div id="json-msg"></div>
+    </div>
+  </div>
+</main>
+
+<script>
+const sb = supabase.createClient(CONFIG.SUPABASE_URL, CONFIG.SUPABASE_ANON_KEY);
+
+// ---------- Code d'acces ----------
+const gate = document.getElementById('pin-gate');
+const app = document.getElementById('app');
+function unlock() {
+  gate.classList.add('hidden');
+  app.classList.remove('hidden');
+  loadQuizzes();
+}
+document.getElementById('pin-btn').onclick = () => {
+  const v = document.getElementById('pin').value.trim();
+  if (v === CONFIG.TEACHER_PIN) {
+    sessionStorage.setItem('teacher_ok', '1');
+    unlock();
+  } else {
+    document.getElementById('pin-msg').innerHTML = '<div class="msg err">Code incorrect.</div>';
+  }
+};
+document.getElementById('pin').addEventListener('keydown', e => { if (e.key === 'Enter') document.getElementById('pin-btn').click(); });
+if (sessionStorage.getItem('teacher_ok') === '1') unlock();
+
+// ---------- Onglets ----------
+const tabForm = document.getElementById('tab-form'), tabJson = document.getElementById('tab-json');
+tabForm.onclick = () => { tabForm.classList.add('on'); tabJson.classList.remove('on'); document.getElementById('pane-form').classList.remove('hidden'); document.getElementById('pane-json').classList.add('hidden'); };
+tabJson.onclick = () => { tabJson.classList.add('on'); tabForm.classList.remove('on'); document.getElementById('pane-json').classList.remove('hidden'); document.getElementById('pane-form').classList.add('hidden'); };
+
+// ---------- Liste des quiz ----------
+async function loadQuizzes() {
+  const box = document.getElementById('quiz-list');
+  const { data: quizzes, error } = await sb.from('quizzes').select('id,title,created_at').order('created_at', { ascending: false });
+  if (error) { box.innerHTML = '<div class="msg err">Erreur : ' + error.message + '</div>'; return; }
+  if (!quizzes.length) { box.innerHTML = '<p class="sub">Aucun quiz pour le moment. Creez-en un ci-dessous.</p>'; return; }
+  const { data: qs } = await sb.from('questions').select('quiz_id');
+  const counts = {};
+  (qs || []).forEach(q => counts[q.quiz_id] = (counts[q.quiz_id] || 0) + 1);
+  box.innerHTML = '';
+  quizzes.forEach(q => {
+    const div = document.createElement('div');
+    div.className = 'card quiz-item';
+    div.innerHTML = '<div><strong></strong><div class="meta"></div></div><div class="actions"></div>';
+    div.querySelector('strong').textContent = q.title;
+    div.querySelector('.meta').textContent = (counts[q.id] || 0) + ' question(s)';
+    const actions = div.querySelector('.actions');
+    const launch = document.createElement('button');
+    launch.className = 'small';
+    launch.textContent = 'Lancer (QR code)';
+    launch.onclick = () => launchQuiz(q.id);
+    const del = document.createElement('button');
+    del.className = 'small danger';
+    del.textContent = 'Supprimer';
+    del.onclick = async () => {
+      if (!confirm('Supprimer ce quiz et ses questions ?')) return;
+      await sb.from('quizzes').delete().eq('id', q.id);
+      loadQuizzes();
+    };
+    actions.appendChild(launch);
+    actions.appendChild(del);
+    box.appendChild(div);
+  });
+}
+
+async function launchQuiz(quizId) {
+  const { data, error } = await sb.from('sessions').insert({ quiz_id: quizId }).select().single();
+  if (error) { alert('Erreur : ' + error.message); return; }
+  location.href = 'live.html?session=' + data.id;
+}
+
+// ---------- Creation manuelle ----------
+const qbox = document.getElementById('questions');
+function addQuestionBlock() {
+  const idx = qbox.children.length + 1;
+  const div = document.createElement('div');
+  div.className = 'qblock';
+  let choices = '';
+  for (let i = 0; i < 4; i++) {
+    choices += '<div class="choices-row"><input type="radio" name="correct-' + idx + '" value="' + i + '"' + (i === 0 ? ' checked' : '') + ' title="Bonne reponse"><input type="text" class="choice" placeholder="Choix ' + String.fromCharCode(65 + i) + '"></div>';
+  }
+  div.innerHTML = '<div class="qhead"><strong>Question ' + idx + '</strong><button class="small danger del-q">Retirer</button></div>' +
+    '<input type="text" class="qtext" placeholder="Texte de la question">' +
+    '<label>Cochez la bonne reponse :</label>' + choices;
+  div.querySelector('.del-q').onclick = () => { div.remove(); renumber(); };
+  qbox.appendChild(div);
+}
+function renumber() {
+  [...qbox.children].forEach((d, i) => { d.querySelector('strong').textContent = 'Question ' + (i + 1); });
+}
+document.getElementById('add-q').onclick = addQuestionBlock;
+addQuestionBlock();
+
+document.getElementById('save-quiz').onclick = async () => {
+  const msg = document.getElementById('form-msg');
+  const title = document.getElementById('quiz-title').value.trim();
+  if (!title) { msg.innerHTML = '<div class="msg err">Donnez un titre au quiz.</div>'; return; }
+  const questions = [];
+  for (const d of qbox.children) {
+    const text = d.querySelector('.qtext').value.trim();
+    const choices = [...d.querySelectorAll('.choice')].map(c => c.value.trim());
+    const correct = parseInt(d.querySelector('input[type=radio]:checked').value, 10);
+    if (!text || choices.some(c => !c)) { msg.innerHTML = '<div class="msg err">Chaque question doit avoir un texte et 4 choix remplis.</div>'; return; }
+    questions.push({ text, choices, correct });
+  }
+  if (!questions.length) { msg.innerHTML = '<div class="msg err">Ajoutez au moins une question.</div>'; return; }
+  const err = await saveQuiz(title, questions);
+  msg.innerHTML = err ? '<div class="msg err">Erreur : ' + err + '</div>' : '<div class="msg ok">Quiz enregistre !</div>';
+  if (!err) { document.getElementById('quiz-title').value = ''; qbox.innerHTML = ''; addQuestionBlock(); loadQuizzes(); }
+};
+
+// ---------- Import JSON ----------
+document.getElementById('import-json').onclick = async () => {
+  const msg = document.getElementById('json-msg');
+  let data;
+  try { data = JSON.parse(document.getElementById('json-input').value); }
+  catch (e) { msg.innerHTML = '<div class="msg err">JSON invalide : ' + e.message + '</div>'; return; }
+  const check = validateQuizJson(data);
+  if (check) { msg.innerHTML = '<div class="msg err">' + check + '</div>'; return; }
+  const err = await saveQuiz(data.title.trim(), data.questions.map(q => ({ text: q.text.trim(), choices: q.choices.map(c => String(c).trim()), correct: q.correct })));
+  msg.innerHTML = err ? '<div class="msg err">Erreur : ' + err + '</div>' : '<div class="msg ok">Quiz "' + data.title.trim() + '" cree (' + data.questions.length + ' questions) !</div>';
+  if (!err) { document.getElementById('json-input').value = ''; loadQuizzes(); }
+};
+
+function validateQuizJson(data) {
+  if (!data || typeof data !== 'object') return 'Le JSON doit etre un objet.';
+  if (!data.title || !String(data.title).trim()) return 'Il manque le champ "title".';
+  if (!Array.isArray(data.questions) || !data.questions.length) return '"questions" doit etre un tableau non vide.';
+  for (let i = 0; i < data.questions.length; i++) {
+    const q = data.questions[i];
+    if (!q.text || !String(q.text).trim()) return 'Question ' + (i + 1) + ' : il manque "text".';
+    if (!Array.isArray(q.choices) || q.choices.length < 2) return 'Question ' + (i + 1) + ' : "choices" doit avoir au moins 2 choix.';
+    if (typeof q.correct !== 'number' || q.correct < 0 || q.correct >= q.choices.length) return 'Question ' + (i + 1) + ' : "correct" doit etre l\'index (0, 1, 2...) du bon choix.';
+  }
+  return null;
+}
+
+async function saveQuiz(title, questions) {
+  const { data: quiz, error } = await sb.from('quizzes').insert({ title }).select().single();
+  if (error) return error.message;
+  const rows = questions.map((q, i) => ({ quiz_id: quiz.id, ord: i, text: q.text, choices: q.choices, correct_index: q.correct }));
+  const { error: e2 } = await sb.from('questions').insert(rows);
+  return e2 ? e2.message : null;
+}
+</script>
+</body>
+</html>

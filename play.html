@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>QuizLive - Repondre au quiz</title>
+<link rel="stylesheet" href="style.css">
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
+<script src="config.js"></script>
+</head>
+<body>
+<header class="topbar">
+  <span class="brand">QuizLive</span>
+</header>
+<main>
+  <div id="loading"><p class="sub">Chargement...</p></div>
+
+  <!-- Identification -->
+  <div id="join" class="hidden">
+    <h1 id="join-title"></h1>
+    <p class="sub">Entrez vos informations pour commencer. Ne quittez pas l'onglet pendant le quiz : au-dela de 3 secondes ailleurs, votre tentative est annulee.</p>
+    <div class="card">
+      <label for="nom">Nom</label>
+      <input type="text" id="nom" autocomplete="family-name">
+      <label for="prenom">Prenom</label>
+      <input type="text" id="prenom" autocomplete="given-name">
+      <label for="matricule">Matricule EFAC</label>
+      <input type="text" id="matricule" autocomplete="off">
+      <div id="join-msg"></div>
+      <br>
+      <button id="start-btn" style="width:100%">Commencer le quiz</button>
+    </div>
+  </div>
+
+  <!-- Quiz -->
+  <div id="quiz" class="hidden">
+    <p class="progress-line" id="progress"></p>
+    <div class="card">
+      <h1 id="qtext" style="font-size:1.2rem"></h1>
+      <div id="choices"></div>
+    </div>
+    <p class="sub" style="font-size:.85rem">Restez sur cette page. Quitter l'onglet ou la fenetre plus de 3 secondes annule votre tentative.</p>
+  </div>
+
+  <!-- Fin -->
+  <div id="end" class="hidden center">
+    <div class="card">
+      <h1>Reponses envoyees</h1>
+      <p class="sub">Merci ! Votre professeur voit vos reponses en direct.</p>
+    </div>
+  </div>
+
+  <!-- Annule -->
+  <div id="cancelled" class="hidden center">
+    <div class="alert-card">
+      <h1 style="color:#fecaca">Tentative annulee</h1>
+      <p id="cancel-reason"></p>
+      <p class="sub" style="color:#fca5a5">Votre professeur a recu une alerte avec votre identite.</p>
+    </div>
+  </div>
+</main>
+
+<script>
+const sb = supabase.createClient(CONFIG.SUPABASE_URL, CONFIG.SUPABASE_ANON_KEY);
+const sessionId = new URLSearchParams(location.search).get('session');
+
+let session = null, questions = [], shuffled = [], current = 0;
+let attemptId = null, identity = null, finished = false, cancelledFlag = false;
+
+function show(id) {
+  ['loading', 'join', 'quiz', 'end', 'cancelled'].forEach(s => document.getElementById(s).classList.toggle('hidden', s !== id));
+}
+
+async function boot() {
+  if (!sessionId) { document.getElementById('loading').innerHTML = '<div class="msg err">Lien invalide : parametre "session" manquant.</div>'; return; }
+  const { data: sess, error } = await sb.from('sessions').select('id,quiz_id,open').eq('id', sessionId).single();
+  if (error || !sess) { document.getElementById('loading').innerHTML = '<div class="msg err">Session introuvable. Verifiez le QR code.</div>'; return; }
+  if (!sess.open) { document.getElementById('loading').innerHTML = '<div class="msg info">Cette session est terminee.</div>'; return; }
+  session = sess;
+  const { data: q } = await sb.from('quizzes').select('title').eq('id', sess.quiz_id).single();
+  const { data: qs } = await sb.from('questions').select('id,text,choices,correct_index').eq('quiz_id', sess.quiz_id).order('ord');
+  questions = qs || [];
+  if (!questions.length) { document.getElementById('loading').innerHTML = '<div class="msg err">Ce quiz ne contient aucune question.</div>'; return; }
+  document.getElementById('join-title').textContent = q ? q.title : 'Quiz';
+  show('join');
+}
+
+document.getElementById('start-btn').onclick = async () => {
+  const nom = document.getElementById('nom').value.trim();
+  const prenom = document.getElementById('prenom').value.trim();
+  const matricule = document.getElementById('matricule').value.trim();
+  if (!nom || !prenom || !matricule) {
+    document.getElementById('join-msg').innerHTML = '<div class="msg err">Remplissez les trois champs.</div>';
+    return;
+  }
+  identity = { nom, prenom, matricule };
+  const { data, error } = await sb.from('attempts').insert({ session_id: sessionId, nom, prenom, matricule }).select().single();
+  if (error) { document.getElementById('join-msg').innerHTML = '<div class="msg err">Erreur : ' + error.message + '</div>'; return; }
+  attemptId = data.id;
+  // Ordre des questions aleatoire pour cet eleve
+  shuffled = questions.slice();
+  for (let i = shuffled.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+  }
+  current = 0;
+  show('quiz');
+  renderQuestion();
+  armAntiCheat();
+};
+
+function renderQuestion() {
+  const q = shuffled[current];
+  document.getElementById('progress').textContent = 'Question ' + (current + 1) + ' / ' + shuffled.length;
+  document.getElementById('qtext').textContent = q.text;
+  const box = document.getElementById('choices');
+  box.innerHTML = '';
+  q.choices.forEach((c, i) => {
+    const b = document.createElement('button');
+    b.className = 'choice-btn';
+    b.textContent = c;
+    b.onclick = () => answer(q, i, b);
+    box.appendChild(b);
+  });
+}
+
+async function answer(q, choiceIndex, btn) {
+  if (cancelledFlag || finished) return;
+  [...document.getElementById('choices').children].forEach(b => b.disabled = true);
+  btn.classList.add('picked');
+  const correct = choiceIndex === q.correct_index;
+  await sb.from('responses').insert({
+    attempt_id: attemptId,
+    session_id: sessionId,
+    question_id: q.id,
+    choice_index: choiceIndex,
+    correct
+  });
+  setTimeout(() => {
+    current++;
+    if (current >= shuffled.length) finish();
+    else renderQuestion();
+  }, 350);
+}
+
+async function finish() {
+  finished = true;
+  const { data: rs } = await sb.from('responses').select('correct').eq('attempt_id', attemptId);
+  const score = (rs || []).filter(r => r.correct).length;
+  await sb.from('attempts').update({ status: 'done', score, total: shuffled.length, finished_at: new Date().toISOString() }).eq('id', attemptId);
+  show('end');
+}
+
+// ---------- Anti-triche ----------
+let awayStart = null;
+
+function armAntiCheat() {
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) awayStart = awayStart || Date.now();
+    else checkAway();
+  });
+  window.addEventListener('blur', () => { awayStart = awayStart || Date.now(); });
+  window.addEventListener('focus', checkAway);
+}
+
+async function checkAway() {
+  if (!awayStart) return;
+  const awayMs = Date.now() - awayStart;
+  awayStart = null;
+  if (finished || cancelledFlag) return;
+  if (awayMs > CONFIG.AWAY_LIMIT_MS) {
+    cancelledFlag = true;
+    const reason = 'A quitte l\'onglet ou la fenetre pendant ' + Math.round(awayMs / 1000) + ' s (limite : 3 s).';
+    await sb.from('attempts').update({ status: 'cancelled', finished_at: new Date().toISOString() }).eq('id', attemptId);
+    await sb.from('alerts').insert({
+      session_id: sessionId,
+      attempt_id: attemptId,
+      nom: identity.nom,
+      prenom: identity.prenom,
+      matricule: identity.matricule,
+      reason
+    });
+    document.getElementById('cancel-reason').textContent = reason;
+    show('cancelled');
+  }
+}
+
+boot();
+</script>
+</body>
+</html>

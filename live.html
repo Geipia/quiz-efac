@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>QuizLive - Session en direct</title>
+<link rel="stylesheet" href="style.css">
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcode-generator/1.4.4/qrcode.min.js"></script>
+<script src="config.js"></script>
+</head>
+<body>
+<header class="topbar">
+  <span class="brand">QuizLive - En direct</span>
+  <a href="teacher.html">Retour professeur</a>
+</header>
+<main>
+  <div id="loading"><p class="sub">Chargement de la session...</p></div>
+
+  <div id="live" class="hidden">
+    <h1 id="quiz-title"></h1>
+    <p class="sub">Les eleves scannent ce QR code pour rejoindre le quiz.</p>
+
+    <div class="grid two">
+      <div class="card center">
+        <div id="qr-box"></div>
+        <p style="margin-top:10px"><a id="join-link" class="big-link" href="#"></a></p>
+      </div>
+      <div class="card">
+        <h2 style="margin-top:0">Session</h2>
+        <p class="sub" id="session-status">Session ouverte - les eleves peuvent rejoindre.</p>
+        <p class="sub">Questions dans un ordre different pour chaque eleve. Si un eleve quitte l'onglet ou la fenetre plus de 3 secondes, sa tentative est annulee et vous etes alerte ci-dessous.</p>
+        <button class="danger" id="close-session">Terminer la session</button>
+      </div>
+    </div>
+
+    <div id="alerts"></div>
+
+    <h2>Resultats en direct <span id="nb-eleves" class="badge active"></span></h2>
+    <div class="card">
+      <table class="results">
+        <thead><tr><th>Eleve</th><th>Matricule</th><th>Progression</th><th>Score</th><th>Statut</th></tr></thead>
+        <tbody id="results-body"><tr><td colspan="5" style="color:var(--muted)">En attente des eleves...</td></tr></tbody>
+      </table>
+    </div>
+  </div>
+</main>
+
+<script>
+const sb = supabase.createClient(CONFIG.SUPABASE_URL, CONFIG.SUPABASE_ANON_KEY);
+const sessionId = new URLSearchParams(location.search).get('session');
+if (!sessionId) { document.getElementById('loading').innerHTML = '<div class="msg err">Parametre "session" manquant dans l\'URL.</div>'; }
+
+let quiz = null, questions = [], attempts = {}, responsesByAttempt = {}, alertRows = [];
+
+async function boot() {
+  if (!sessionId) return;
+  const { data: sess, error } = await sb.from('sessions').select('id,quiz_id,open').eq('id', sessionId).single();
+  if (error || !sess) { document.getElementById('loading').innerHTML = '<div class="msg err">Session introuvable.</div>'; return; }
+  const { data: q } = await sb.from('quizzes').select('id,title').eq('id', sess.quiz_id).single();
+  quiz = q;
+  const { data: qs } = await sb.from('questions').select('id').eq('quiz_id', sess.quiz_id);
+  questions = qs || [];
+
+  document.getElementById('quiz-title').textContent = q.title;
+  document.getElementById('loading').classList.add('hidden');
+  document.getElementById('live').classList.remove('hidden');
+  if (!sess.open) {
+    document.getElementById('session-status').textContent = 'Session terminee.';
+    document.getElementById('close-session').disabled = true;
+  }
+
+  // QR code vers la page eleve
+  const joinUrl = new URL('play.html', location.href);
+  joinUrl.search = '?session=' + sessionId;
+  const qr = qrcode(0, 'M');
+  qr.addData(joinUrl.href);
+  qr.make();
+  document.getElementById('qr-box').innerHTML = qr.createImgTag(5, 8);
+  const link = document.getElementById('join-link');
+  link.href = joinUrl.href;
+  link.textContent = joinUrl.href;
+
+  // Etat initial
+  const { data: at } = await sb.from('attempts').select('*').eq('session_id', sessionId);
+  (at || []).forEach(a => attempts[a.id] = a);
+  const { data: rs } = await sb.from('responses').select('*').eq('session_id', sessionId);
+  (rs || []).forEach(r => { (responsesByAttempt[r.attempt_id] = responsesByAttempt[r.attempt_id] || []).push(r); });
+  const { data: al } = await sb.from('alerts').select('*').eq('session_id', sessionId).order('created_at');
+  alertRows = al || [];
+  render();
+
+  // Temps reel
+  sb.channel('live-' + sessionId)
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'attempts', filter: 'session_id=eq.' + sessionId }, p => {
+      attempts[p.new.id] = p.new; render();
+    })
+    .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'responses', filter: 'session_id=eq.' + sessionId }, p => {
+      const r = p.new;
+      (responsesByAttempt[r.attempt_id] = responsesByAttempt[r.attempt_id] || []).push(r);
+      render();
+    })
+    .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'alerts', filter: 'session_id=eq.' + sessionId }, p => {
+      alertRows.push(p.new); render();
+      flashTitle();
+    })
+    .subscribe();
+}
+
+document.getElementById('close-session').onclick = async () => {
+  if (!confirm('Terminer la session ? Les eleves ne pourront plus la rejoindre.')) return;
+  await sb.from('sessions').update({ open: false }).eq('id', sessionId);
+  document.getElementById('session-status').textContent = 'Session terminee.';
+  document.getElementById('close-session').disabled = true;
+};
+
+function flashTitle() {
+  const old = document.title;
+  document.title = 'ALERTE - QuizLive';
+  setTimeout(() => document.title = old, 5000);
+}
+
+function render() {
+  // Alertes
+  const abox = document.getElementById('alerts');
+  if (alertRows.length) {
+    abox.innerHTML = '<h2 style="color:var(--red)">Alertes anti-triche</h2>';
+    alertRows.forEach(a => {
+      const d = document.createElement('div');
+      d.className = 'alert-card';
+      const when = new Date(a.created_at).toLocaleTimeString('fr-FR');
+      d.innerHTML = '<div class="who"></div><div></div><div class="when"></div>';
+      d.children[0].textContent = (a.prenom || '') + ' ' + (a.nom || '') + ' (matricule ' + (a.matricule || '?') + ')';
+      d.children[1].textContent = a.reason;
+      d.children[2].textContent = when;
+      abox.appendChild(d);
+    });
+  } else {
+    abox.innerHTML = '';
+  }
+
+  // Tableau resultats
+  const tbody = document.getElementById('results-body');
+  const list = Object.values(attempts).sort((a, b) => a.started_at < b.started_at ? -1 : 1);
+  document.getElementById('nb-eleves').textContent = list.length + ' eleve(s)';
+  if (!list.length) {
+    tbody.innerHTML = '<tr><td colspan="5" style="color:var(--muted)">En attente des eleves...</td></tr>';
+    return;
+  }
+  tbody.innerHTML = '';
+  list.forEach(a => {
+    const rs = responsesByAttempt[a.id] || [];
+    const score = rs.filter(r => r.correct).length;
+    const tr = document.createElement('tr');
+    let status, cls;
+    if (a.status === 'cancelled') { status = 'ANNULE'; cls = 'cancelled'; }
+    else if (a.status === 'done') { status = 'Termine'; cls = 'done'; }
+    else { status = 'En cours'; cls = 'active'; }
+    tr.innerHTML = '<td></td><td></td><td>' + rs.length + ' / ' + questions.length + '</td><td>' + score + ' / ' + questions.length + '</td><td><span class="badge ' + cls + '">' + status + '</span></td>';
+    tr.children[0].textContent = a.prenom + ' ' + a.nom;
+    tr.children[1].textContent = a.matricule;
+    tbody.appendChild(tr);
+  });
+}
+
+boot();
+</script>
+</body>
+</html>

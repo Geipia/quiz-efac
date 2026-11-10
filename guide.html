@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>QuizLive - Creer un quiz avec Claude</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="topbar">
+  <span class="brand">QuizLive - Guide Claude</span>
+  <a href="index.html">Accueil</a>
+</header>
+<main>
+  <h1>Creer un quiz avec Claude</h1>
+  <p class="sub">Cette page sert de notice : donnez-la (ou copiez son contenu) a Claude pour qu'il redige vos quiz au bon format.</p>
+
+  <div class="card">
+    <h2 style="margin-top:0">Mode d'emploi</h2>
+    <ol class="steps">
+      <li>Ouvrez Claude et collez-lui le <strong>prompt</strong> ci-dessous, en precisant votre sujet, le niveau de la classe et le nombre de questions.</li>
+      <li>Claude vous repond avec un bloc <strong>JSON</strong>.</li>
+      <li>Allez dans l'<strong>espace professeur</strong>, onglet <strong>"JSON (Claude)"</strong>, collez le JSON et cliquez <strong>"Creer le quiz"</strong>.</li>
+      <li>Le quiz apparait dans votre liste : il ne reste qu'a le <strong>lancer</strong> pour afficher le QR code.</li>
+    </ol>
+  </div>
+
+  <div class="card">
+    <h2 style="margin-top:0">Prompt a copier-coller dans Claude</h2>
+    <pre id="prompt">Redige un quiz a choix multiples au format JSON strict (aucun texte autour),
+selon ce schema exact :
+
+{
+  "title": "Titre du quiz",
+  "questions": [
+    {
+      "text": "Texte de la question ?",
+      "choices": ["Choix A", "Choix B", "Choix C", "Choix D"],
+      "correct": 0
+    }
+  ]
+}
+
+Regles :
+- "title" : titre court du quiz.
+- "questions" : tableau de questions (au moins 1).
+- "text" : l'enonce de la question.
+- "choices" : tableau de 2 a 6 reponses possibles (4 de preference).
+- "correct" : l'index du bon choix dans "choices", en commencant a 0
+  (0 = premier choix, 1 = deuxieme, etc.).
+- Varie la position de la bonne reponse d'une question a l'autre.
+
+Sujet : [DECRIRE LE SUJET ICI]
+Niveau : [NIVEAU DE LA CLASSE]
+Nombre de questions : [NOMBRE]</pre>
+    <button class="secondary" id="copy-prompt">Copier le prompt</button>
+    <div id="copy-msg"></div>
+  </div>
+
+  <div class="card">
+    <h2 style="margin-top:0">Exemple complet</h2>
+    <pre>{
+  "title": "Histoire - La Renaissance",
+  "questions": [
+    {
+      "text": "En quel siecle commence la Renaissance en Italie ?",
+      "choices": ["XIIe siecle", "XIVe siecle", "XVIe siecle", "XVIIIe siecle"],
+      "correct": 1
+    },
+    {
+      "text": "Quel artiste a peint la Joconde ?",
+      "choices": ["Michel-Ange", "Raphael", "Leonard de Vinci", "Botticelli"],
+      "correct": 2
+    },
+    {
+      "text": "Quelle invention a accelere la diffusion des idees a la Renaissance ?",
+      "choices": ["La machine a vapeur", "L'imprimerie", "Le telegraphe", "La boussole"],
+      "correct": 1
+    }
+  ]
+}</pre>
+  </div>
+
+  <div class="card">
+    <h2 style="margin-top:0">Note pour Claude (ou toute autre IA)</h2>
+    <p class="sub">Si vous etes une IA et qu'un utilisateur vous donne cette page : produisez uniquement le bloc JSON decrit ci-dessus, sans markdown ni commentaires, afin qu'il puisse etre colle tel quel dans l'onglet "JSON (Claude)" de l'espace professeur. L'application valide le schema (title, questions[].text, questions[].choices, questions[].correct) et refuse tout JSON non conforme avec un message d'erreur explicite.</p>
+  </div>
+
+  <p class="footer-note"><a href="teacher.html" style="color:var(--accent)">Aller a l'espace professeur</a></p>
+</main>
+<script>
+document.getElementById('copy-prompt').onclick = async () => {
+  try {
+    await navigator.clipboard.writeText(document.getElementById('prompt').textContent);
+    document.getElementById('copy-msg').innerHTML = '<div class="msg ok">Prompt copie !</div>';
+  } catch (e) {
+    document.getElementById('copy-msg').innerHTML = '<div class="msg err">Copie impossible : selectionnez le texte manuellement.</div>';
+  }
+};
+</script>
+</body>
+</html>

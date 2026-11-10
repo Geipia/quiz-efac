@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>QuizLive - Quiz en classe</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="topbar">
+  <span class="brand">QuizLive</span>
+  <a href="guide.html">Guide Claude</a>
+</header>
+<main>
+  <h1>Quiz en direct pour la classe</h1>
+  <p class="sub">Le professeur lance un quiz, les eleves scannent le QR code et repondent sur leur telephone. Resultats en direct.</p>
+
+  <div class="grid two">
+    <div class="card">
+      <h2>Professeur</h2>
+      <p class="sub">Creez vos quiz, lancez une session, affichez le QR code et suivez les reponses en direct.</p>
+      <a class="btn" href="teacher.html">Espace professeur</a>
+    </div>
+    <div class="card">
+      <h2>Eleve</h2>
+      <p class="sub">Pour participer, scannez le QR code affiche par votre professeur. Vous entrerez votre nom, prenom et matricule EFAC, puis vous repondrez aux questions.</p>
+      <p class="sub">Attention : si vous quittez l'onglet ou la fenetre plus de 3 secondes pendant le quiz, votre tentative est annulee et le professeur est prevenu.</p>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Creer un quiz avec Claude</h2>
+    <p class="sub">Vous pouvez demander a Claude (IA) de rediger vos quiz. Donnez-lui la page guide, collez le JSON qu'il produit, c'est pret.</p>
+    <a class="btn secondary" href="guide.html">Voir le guide pour Claude</a>
+  </div>
+
+  <p class="footer-note">QuizLive - heberge sur GitHub Pages, donnees sur Supabase.</p>
+</main>
+</body>
+</html>
