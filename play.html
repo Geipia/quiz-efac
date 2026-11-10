@@ -34,6 +34,8 @@
 
   <!-- Quiz -->
   <div id="quiz" class="hidden">
+    <div id="timer" class="quiz-timer hidden">--:--</div>
+    <div id="timer-alert" class="timer-alert hidden">Plus que 30 secondes !</div>
     <div id="resume-note" class="msg info hidden">Reprise de votre tentative en cours : vos reponses deja envoyees sont conservees.</div>
     <p class="progress-line" id="progress"></p>
     <div class="card">
@@ -46,8 +48,8 @@
   <!-- Fin -->
   <div id="end" class="hidden center">
     <div class="card">
-      <h1>Reponses envoyees</h1>
-      <p class="sub">Merci ! Votre professeur voit vos reponses en direct.</p>
+      <h1 id="end-title">Reponses envoyees</h1>
+      <p class="sub" id="end-sub">Merci ! Votre professeur voit vos reponses en direct.</p>
     </div>
   </div>
 
@@ -67,6 +69,7 @@ const sessionId = new URLSearchParams(location.search).get('session');
 
 let session = null, questions = [], shuffled = [], current = 0;
 let attemptId = null, identity = null, finished = false, cancelledFlag = false;
+let quizTimerSec = null, deadline = null, timerInt = null, warned30 = false;
 
 // Le matricule est l'identifiant unique de l'eleve : on normalise pour comparer
 // (espaces en trop et majuscules/minuscules ignores).
@@ -82,7 +85,8 @@ async function boot() {
   if (error || !sess) { document.getElementById('loading').innerHTML = '<div class="msg err">Session introuvable. Verifiez le QR code.</div>'; return; }
   if (!sess.open) { document.getElementById('loading').innerHTML = '<div class="msg info">Cette session est terminee.</div>'; return; }
   session = sess;
-  const { data: q } = await sb.from('quizzes').select('title').eq('id', sess.quiz_id).single();
+  const { data: q } = await sb.from('quizzes').select('title,timer_seconds').eq('id', sess.quiz_id).single();
+  quizTimerSec = q && q.timer_seconds ? q.timer_seconds : null;
   const { data: qs } = await sb.from('questions').select('id,text,choices,correct_index').eq('quiz_id', sess.quiz_id).order('ord');
   questions = qs || [];
   if (!questions.length) { document.getElementById('loading').innerHTML = '<div class="msg err">Ce quiz ne contient aucune question.</div>'; return; }
@@ -134,6 +138,7 @@ document.getElementById('start-btn').onclick = async () => {
     const answered = new Set((rs || []).map(r => r.question_id));
     shuffled = shuffle(questions.filter(q => !answered.has(q.id)));
     if (!shuffled.length) { await finish(); return; }
+    startTimer(mine.started_at);
     current = 0;
     document.getElementById('resume-note').classList.remove('hidden');
     show('quiz');
@@ -150,6 +155,7 @@ document.getElementById('start-btn').onclick = async () => {
     return;
   }
   attemptId = data.id;
+  startTimer(data.started_at);
   // Ordre des questions aleatoire pour cet eleve
   shuffled = shuffle(questions.slice());
   current = 0;
@@ -192,12 +198,55 @@ async function answer(q, choiceIndex, btn) {
   }, 350);
 }
 
-async function finish() {
+async function finish(timeUp) {
   finished = true;
+  if (timerInt) { clearInterval(timerInt); timerInt = null; }
+  document.getElementById('timer').classList.add('hidden');
+  document.getElementById('timer-alert').classList.add('hidden');
   const { data: rs } = await sb.from('responses').select('correct').eq('attempt_id', attemptId);
   const score = (rs || []).filter(r => r.correct).length;
   await sb.from('attempts').update({ status: 'done', score, total: questions.length, finished_at: new Date().toISOString() }).eq('id', attemptId);
+  if (timeUp) {
+    // Choix : a 0 seconde, les reponses deja donnees sont envoyees telles quelles.
+    document.getElementById('end-title').textContent = 'Temps ecoule !';
+    document.getElementById('end-sub').textContent = 'Le chrono est termine : vos reponses deja donnees ont ete envoyees.';
+  }
   show('end');
+}
+
+// ---------- Chrono ----------
+// Choix : le chrono (en minutes a la creation du quiz) demarre quand l'eleve
+// clique "Commencer" (started_at de sa tentative, horodatage serveur). En cas
+// de reprise apres rechargement, il repart du started_at d'origine : le temps
+// continue de couler pendant le rechargement.
+function startTimer(startedAt) {
+  if (!quizTimerSec || !startedAt) return;
+  deadline = new Date(startedAt).getTime() + quizTimerSec * 1000;
+  const el = document.getElementById('timer');
+  el.classList.remove('hidden');
+  const tick = () => {
+    if (finished || cancelledFlag) { if (timerInt) { clearInterval(timerInt); timerInt = null; } return; }
+    const left = deadline - Date.now();
+    if (left <= 0) {
+      el.textContent = '0:00';
+      clearInterval(timerInt); timerInt = null;
+      finish(true);
+      return;
+    }
+    const s = Math.ceil(left / 1000);
+    el.textContent = Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0');
+    if (left <= 30000) {
+      el.classList.add('warn');
+      if (!warned30) {
+        warned30 = true;
+        const a = document.getElementById('timer-alert');
+        a.classList.remove('hidden');
+        setTimeout(() => a.classList.add('hidden'), 6000);
+      }
+    }
+  };
+  tick();
+  timerInt = setInterval(tick, 500);
 }
 
 // ---------- Anti-triche ----------
@@ -219,6 +268,9 @@ async function checkAway() {
   if (finished || cancelledFlag) return;
   if (awayMs > CONFIG.AWAY_LIMIT_MS) {
     cancelledFlag = true;
+    if (timerInt) { clearInterval(timerInt); timerInt = null; }
+    document.getElementById('timer').classList.add('hidden');
+    document.getElementById('timer-alert').classList.add('hidden');
     const reason = 'A quitte l\'onglet ou la fenetre pendant ' + Math.round(awayMs / 1000) + ' s (limite : 3 s).';
     await sb.from('attempts').update({ status: 'cancelled', finished_at: new Date().toISOString() }).eq('id', attemptId);
     await sb.from('alerts').insert({

@@ -132,3 +132,42 @@ ol.steps li { margin-bottom: 6px; }
 .tabs button.on { background: var(--accent2); }
 .center { text-align: center; }
 .footer-note { color: var(--muted); font-size: .8rem; margin-top: 30px; text-align: center; }
+
+/* Chrono du quiz (page eleve) */
+.quiz-timer {
+  position: fixed;
+  top: 12px;
+  right: 16px;
+  z-index: 50;
+  background: var(--card2);
+  border: 1px solid var(--accent);
+  color: var(--accent);
+  font-size: 1.2rem;
+  font-weight: 700;
+  padding: 6px 14px;
+  border-radius: 999px;
+  font-variant-numeric: tabular-nums;
+}
+.quiz-timer.warn {
+  border-color: var(--red);
+  color: #fecaca;
+  background: #7f1d1d;
+  animation: timer-pulse 1s infinite;
+}
+.timer-alert {
+  position: fixed;
+  top: 60px;
+  right: 16px;
+  z-index: 50;
+  background: #7f1d1d;
+  border: 1px solid var(--red);
+  color: #fecaca;
+  padding: 10px 16px;
+  border-radius: var(--radius);
+  font-weight: 600;
+  box-shadow: 0 4px 16px rgba(0,0,0,.4);
+}
+@keyframes timer-pulse {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.08); }
+}

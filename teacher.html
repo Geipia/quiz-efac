@@ -63,6 +63,8 @@
     <div id="pane-form" class="card">
       <label for="quiz-title">Titre du quiz</label>
       <input type="text" id="quiz-title" placeholder="Ex : Histoire - La Renaissance">
+      <label for="quiz-timer">Chrono en minutes (optionnel - vide = pas de chrono)</label>
+      <input type="number" id="quiz-timer" min="1" step="1" placeholder="Ex : 10" style="max-width:220px">
       <div id="questions"></div>
       <button class="secondary" id="add-q">+ Ajouter une question</button>
       <br><br>
@@ -75,6 +77,7 @@
       <p class="sub">Collez ici le JSON produit par Claude. Le format exact et le prompt a donner a Claude sont sur la <a href="guide.html" style="color:var(--accent)">page guide</a>.</p>
       <pre>{
   "title": "Titre du quiz",
+  "timer_minutes": 10,
   "questions": [
     {
       "text": "Texte de la question ?",
@@ -123,7 +126,7 @@ tabJson.onclick = () => { tabJson.classList.add('on'); tabForm.classList.remove(
 // ---------- Liste des quiz ----------
 async function loadQuizzes() {
   const box = document.getElementById('quiz-list');
-  const { data: quizzes, error } = await sb.from('quizzes').select('id,title,created_at').order('created_at', { ascending: false });
+  const { data: quizzes, error } = await sb.from('quizzes').select('id,title,created_at,timer_seconds').order('created_at', { ascending: false });
   if (error) { box.innerHTML = '<div class="msg err">Erreur : ' + error.message + '</div>'; return; }
   if (!quizzes.length) { box.innerHTML = '<p class="sub">Aucun quiz pour le moment. Creez-en un ci-dessous.</p>'; return; }
   const { data: qs } = await sb.from('questions').select('quiz_id');
@@ -135,7 +138,7 @@ async function loadQuizzes() {
     div.className = 'card quiz-item';
     div.innerHTML = '<div><strong></strong><div class="meta"></div></div><div class="actions"></div>';
     div.querySelector('strong').textContent = q.title;
-    div.querySelector('.meta').textContent = (counts[q.id] || 0) + ' question(s)';
+    div.querySelector('.meta').textContent = (counts[q.id] || 0) + ' question(s)' + (q.timer_seconds ? ' - chrono ' + (q.timer_seconds / 60) + ' min' : '');
     const actions = div.querySelector('.actions');
     const launch = document.createElement('button');
     launch.className = 'small';
@@ -285,9 +288,11 @@ document.getElementById('save-quiz').onclick = async () => {
     questions.push({ text, choices, correct });
   }
   if (!questions.length) { msg.innerHTML = '<div class="msg err">Ajoutez au moins une question.</div>'; return; }
-  const err = await saveQuiz(title, questions);
+  const timerMin = parseFloat(document.getElementById('quiz-timer').value);
+  const timerSeconds = !isNaN(timerMin) && timerMin > 0 ? Math.round(timerMin * 60) : null;
+  const err = await saveQuiz(title, questions, timerSeconds);
   msg.innerHTML = err ? '<div class="msg err">Erreur : ' + err + '</div>' : '<div class="msg ok">Quiz enregistre !</div>';
-  if (!err) { document.getElementById('quiz-title').value = ''; qbox.innerHTML = ''; addQuestionBlock(); loadQuizzes(); }
+  if (!err) { document.getElementById('quiz-title').value = ''; document.getElementById('quiz-timer').value = ''; qbox.innerHTML = ''; addQuestionBlock(); loadQuizzes(); }
 };
 
 // ---------- Import JSON ----------
@@ -298,7 +303,8 @@ document.getElementById('import-json').onclick = async () => {
   catch (e) { msg.innerHTML = '<div class="msg err">JSON invalide : ' + e.message + '</div>'; return; }
   const check = validateQuizJson(data);
   if (check) { msg.innerHTML = '<div class="msg err">' + check + '</div>'; return; }
-  const err = await saveQuiz(data.title.trim(), data.questions.map(q => ({ text: q.text.trim(), choices: q.choices.map(c => String(c).trim()), correct: q.correct })));
+  const timerSeconds = data.timer_minutes ? Math.round(data.timer_minutes * 60) : null;
+  const err = await saveQuiz(data.title.trim(), data.questions.map(q => ({ text: q.text.trim(), choices: q.choices.map(c => String(c).trim()), correct: q.correct })), timerSeconds);
   msg.innerHTML = err ? '<div class="msg err">Erreur : ' + err + '</div>' : '<div class="msg ok">Quiz "' + data.title.trim() + '" cree (' + data.questions.length + ' questions) !</div>';
   if (!err) { document.getElementById('json-input').value = ''; loadQuizzes(); }
 };
@@ -306,6 +312,7 @@ document.getElementById('import-json').onclick = async () => {
 function validateQuizJson(data) {
   if (!data || typeof data !== 'object') return 'Le JSON doit etre un objet.';
   if (!data.title || !String(data.title).trim()) return 'Il manque le champ "title".';
+  if (data.timer_minutes !== undefined && data.timer_minutes !== null && (typeof data.timer_minutes !== 'number' || data.timer_minutes <= 0)) return '"timer_minutes" doit etre un nombre de minutes positif (champ optionnel).';
   if (!Array.isArray(data.questions) || !data.questions.length) return '"questions" doit etre un tableau non vide.';
   for (let i = 0; i < data.questions.length; i++) {
     const q = data.questions[i];
@@ -316,8 +323,8 @@ function validateQuizJson(data) {
   return null;
 }
 
-async function saveQuiz(title, questions) {
-  const { data: quiz, error } = await sb.from('quizzes').insert({ title }).select().single();
+async function saveQuiz(title, questions, timerSeconds) {
+  const { data: quiz, error } = await sb.from('quizzes').insert({ title, timer_seconds: timerSeconds || null }).select().single();
   if (error) return error.message;
   const rows = questions.map((q, i) => ({ quiz_id: quiz.id, ord: i, text: q.text, choices: q.choices, correct_index: q.correct }));
   const { error: e2 } = await sb.from('questions').insert(rows);

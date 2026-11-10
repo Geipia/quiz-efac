@@ -32,6 +32,7 @@ selon ce schema exact :
 
 {
   "title": "Titre du quiz",
+  "timer_minutes": 10,
   "questions": [
     {
       "text": "Texte de la question ?",
@@ -43,6 +44,10 @@ selon ce schema exact :
 
 Regles :
 - "title" : titre court du quiz.
+- "timer_minutes" : OPTIONNEL - duree du quiz en minutes (nombre positif).
+  Ne mets ce champ que si un chrono est demande. Quand il est present,
+  l'eleve voit le temps rester en permanence, recoit une alerte a 30
+  secondes, et ses reponses sont envoyees automatiquement a la fin.
 - "questions" : tableau de questions (au moins 1).
 - "text" : l'enonce de la question.
 - "choices" : tableau de 2 a 6 reponses possibles (4 de preference).
@@ -61,6 +66,7 @@ Nombre de questions : [NOMBRE]</pre>
     <h2 style="margin-top:0">Exemple complet</h2>
     <pre>{
   "title": "Histoire - La Renaissance",
+  "timer_minutes": 5,
   "questions": [
     {
       "text": "En quel siecle commence la Renaissance en Italie ?",
@@ -83,7 +89,7 @@ Nombre de questions : [NOMBRE]</pre>
 
   <div class="card">
     <h2 style="margin-top:0">Note pour Claude (ou toute autre IA)</h2>
-    <p class="sub">Si vous etes une IA et qu'un utilisateur vous donne cette page : produisez uniquement le bloc JSON decrit ci-dessus, sans markdown ni commentaires, afin qu'il puisse etre colle tel quel dans l'onglet "JSON (Claude)" de l'espace professeur. L'application valide le schema (title, questions[].text, questions[].choices, questions[].correct) et refuse tout JSON non conforme avec un message d'erreur explicite.</p>
+    <p class="sub">Si vous etes une IA et qu'un utilisateur vous donne cette page : produisez uniquement le bloc JSON decrit ci-dessus, sans markdown ni commentaires, afin qu'il puisse etre colle tel quel dans l'onglet "JSON (Claude)" de l'espace professeur. L'application valide le schema (title, timer_minutes optionnel, questions[].text, questions[].choices, questions[].correct) et refuse tout JSON non conforme avec un message d'erreur explicite.</p>
   </div>
 
   <p class="footer-note"><a href="teacher.html" style="color:var(--accent)">Aller a l'espace professeur</a></p>

@@ -31,6 +31,7 @@
       <div class="card">
         <h2 style="margin-top:0">Session</h2>
         <p class="sub" id="session-status">Session ouverte - les eleves peuvent rejoindre.</p>
+        <p class="sub" id="timer-info"></p>
         <p class="sub">Questions dans un ordre different pour chaque eleve. Un matricule ne peut participer qu'une fois. Si un eleve quitte l'onglet ou la fenetre plus de 3 secondes, sa tentative est annulee et vous etes alerte ci-dessous.</p>
         <button class="danger" id="close-session">Terminer la session</button>
         <button id="export-xls" style="margin-left:8px">Exporter en Excel</button>
@@ -45,6 +46,11 @@
         <thead><tr><th>Eleve</th><th>Matricule</th><th>Progression</th><th>Score</th><th>Statut</th></tr></thead>
         <tbody id="results-body"><tr><td colspan="5" style="color:var(--muted)">En attente des eleves...</td></tr></tbody>
       </table>
+    </div>
+
+    <div id="delete-zone" class="hidden" style="margin-top:28px;text-align:center">
+      <button class="danger" id="delete-session">Supprimer cette session et ses resultats</button>
+      <p class="sub" style="font-size:.85rem">La session et tous ses resultats seront definitivement effaces de l'historique.</p>
     </div>
   </div>
 </main>
@@ -62,8 +68,12 @@ async function boot() {
   const { data: sess, error } = await sb.from('sessions').select('id,quiz_id,open,class_id,created_at').eq('id', sessionId).single();
   if (error || !sess) { document.getElementById('loading').innerHTML = '<div class="msg err">Session introuvable.</div>'; return; }
   sessionRow = sess;
-  const { data: q } = await sb.from('quizzes').select('id,title').eq('id', sess.quiz_id).single();
+  await maybeReopenAfterReload();
+  const { data: q } = await sb.from('quizzes').select('id,title,timer_seconds').eq('id', sess.quiz_id).single();
   quiz = q;
+  if (q && q.timer_seconds) {
+    document.getElementById('timer-info').textContent = 'Chrono : ' + (q.timer_seconds / 60) + ' minute(s) par eleve. Les reponses sont envoyees automatiquement quand le temps est ecoule.';
+  }
   if (sess.class_id) {
     const { data: c } = await sb.from('classes').select('name').eq('id', sess.class_id).single();
     className = c ? c.name : '';
@@ -74,9 +84,12 @@ async function boot() {
   document.getElementById('quiz-title').textContent = q.title + (className ? ' - ' + className : '');
   document.getElementById('loading').classList.add('hidden');
   document.getElementById('live').classList.remove('hidden');
-  if (!sess.open) {
+  if (!sessionRow.open) {
     document.getElementById('session-status').textContent = 'Session terminee.';
     document.getElementById('close-session').disabled = true;
+    document.getElementById('delete-zone').classList.remove('hidden');
+  } else {
+    armAutoClose();
   }
 
   // QR code vers la page eleve
@@ -118,10 +131,67 @@ async function boot() {
 
 document.getElementById('close-session').onclick = async () => {
   if (!confirm('Terminer la session ? Les eleves ne pourront plus la rejoindre.')) return;
+  closedManually = true;
   await sb.from('sessions').update({ open: false }).eq('id', sessionId);
+  sessionRow.open = false;
   document.getElementById('session-status').textContent = 'Session terminee.';
   document.getElementById('close-session').disabled = true;
+  document.getElementById('delete-zone').classList.remove('hidden');
 };
+
+// ---------- Suppression d'une session terminee ----------
+document.getElementById('delete-session').onclick = async () => {
+  if (!confirm('Supprimer definitivement cette session et tous ses resultats ? Cette action est irreversible.')) return;
+  const btn = document.getElementById('delete-session');
+  btn.disabled = true;
+  btn.textContent = 'Suppression...';
+  await sb.from('responses').delete().eq('session_id', sessionId);
+  await sb.from('alerts').delete().eq('session_id', sessionId);
+  await sb.from('attempts').delete().eq('session_id', sessionId);
+  await sb.from('sessions').delete().eq('id', sessionId);
+  location.href = 'teacher.html';
+};
+
+// ---------- Fermeture automatique en quittant la page ----------
+// Choix : quitter la page live (retour vers l'espace professeur, fermeture de
+// l'onglet) termine la session immediatement, pour eviter les sessions oubliees
+// ouvertes. Un simple rechargement ne la ferme pas definitivement : au depart on
+// pose un marqueur (valide 15 s) et on ferme ; si la page revient tout de suite,
+// c'etait un rechargement et la session est rouverte.
+let autoCloseArmed = false, closedManually = false;
+
+function armAutoClose() {
+  if (autoCloseArmed) return;
+  autoCloseArmed = true;
+  window.addEventListener('pagehide', () => {
+    if (closedManually || !sessionRow.open) return;
+    sessionStorage.setItem('ql-autoclose-' + sessionId, String(Date.now()));
+    // fetch keepalive : seul moyen fiable d'envoyer la requete pendant pagehide
+    // (sendBeacon ne permet pas les en-tetes apikey exiges par Supabase).
+    fetch(CONFIG.SUPABASE_URL + '/rest/v1/sessions?id=eq.' + sessionId, {
+      method: 'PATCH',
+      headers: {
+        apikey: CONFIG.SUPABASE_ANON_KEY,
+        Authorization: 'Bearer ' + CONFIG.SUPABASE_ANON_KEY,
+        'Content-Type': 'application/json',
+        Prefer: 'return=minimal'
+      },
+      body: JSON.stringify({ open: false }),
+      keepalive: true
+    });
+  });
+}
+
+async function maybeReopenAfterReload() {
+  const key = 'ql-autoclose-' + sessionId;
+  const ts = parseInt(sessionStorage.getItem(key) || '0', 10);
+  if (!ts) return;
+  sessionStorage.removeItem(key);
+  if (Date.now() - ts < 15000 && !sessionRow.open) {
+    await sb.from('sessions').update({ open: true }).eq('id', sessionId);
+    sessionRow.open = true;
+  }
+}
 
 document.getElementById('export-xls').onclick = () => {
   exportSessionXLSX(sb, sessionRow, quiz ? quiz.title : 'quiz', className);
