@@ -18,7 +18,7 @@
   <!-- Identification -->
   <div id="join" class="hidden">
     <h1 id="join-title"></h1>
-    <p class="sub">Entrez vos informations pour commencer. Ne quittez pas l'onglet pendant le quiz : au-dela de 3 secondes ailleurs, votre tentative est annulee.</p>
+    <p class="sub">Entrez vos informations pour commencer. Ne quittez pas l'onglet pendant le quiz : au-dela de 3 secondes ailleurs, votre tentative est annulee et vous ne pourrez pas recommencer.</p>
     <div class="card">
       <label for="nom">Nom</label>
       <input type="text" id="nom" autocomplete="family-name">
@@ -34,6 +34,7 @@
 
   <!-- Quiz -->
   <div id="quiz" class="hidden">
+    <div id="resume-note" class="msg info hidden">Reprise de votre tentative en cours : vos reponses deja envoyees sont conservees.</div>
     <p class="progress-line" id="progress"></p>
     <div class="card">
       <h1 id="qtext" style="font-size:1.2rem"></h1>
@@ -67,6 +68,10 @@ const sessionId = new URLSearchParams(location.search).get('session');
 let session = null, questions = [], shuffled = [], current = 0;
 let attemptId = null, identity = null, finished = false, cancelledFlag = false;
 
+// Le matricule est l'identifiant unique de l'eleve : on normalise pour comparer
+// (espaces en trop et majuscules/minuscules ignores).
+const normMatricule = m => (m || '').trim().replace(/\s+/g, ' ').toUpperCase();
+
 function show(id) {
   ['loading', 'join', 'quiz', 'end', 'cancelled'].forEach(s => document.getElementById(s).classList.toggle('hidden', s !== id));
 }
@@ -85,24 +90,68 @@ async function boot() {
   show('join');
 }
 
+function shuffle(arr) {
+  for (let i = arr.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [arr[i], arr[j]] = [arr[j], arr[i]];
+  }
+  return arr;
+}
+
 document.getElementById('start-btn').onclick = async () => {
+  const msgBox = document.getElementById('join-msg');
   const nom = document.getElementById('nom').value.trim();
   const prenom = document.getElementById('prenom').value.trim();
   const matricule = document.getElementById('matricule').value.trim();
   if (!nom || !prenom || !matricule) {
-    document.getElementById('join-msg').innerHTML = '<div class="msg err">Remplissez les trois champs.</div>';
+    msgBox.innerHTML = '<div class="msg err">Remplissez les trois champs.</div>';
     return;
   }
+  document.getElementById('start-btn').disabled = true;
+
+  // Un matricule = une seule tentative par session.
+  const mat = normMatricule(matricule);
+  const { data: existing } = await sb.from('attempts').select('*').eq('session_id', sessionId);
+  const mine = (existing || []).find(a => normMatricule(a.matricule) === mat);
+
+  if (mine && mine.status === 'done') {
+    msgBox.innerHTML = '<div class="msg err">Ce matricule a deja participe a ce quiz. Il est impossible de recommencer.</div>';
+    document.getElementById('start-btn').disabled = false;
+    return;
+  }
+  if (mine && mine.status === 'cancelled') {
+    msgBox.innerHTML = '<div class="msg err">Ce matricule a ete bloque par l\'anti-triche. Il est impossible de recommencer ce quiz.</div>';
+    document.getElementById('start-btn').disabled = false;
+    return;
+  }
+  if (mine && mine.status === 'in_progress') {
+    // Choix : une tentative en cours (page rechargee, pas annulee) est reprise
+    // la ou elle en etait, au lieu d'etre bloquee. Les reponses deja envoyees
+    // sont conservees, les questions restantes sont re-melangees.
+    identity = { nom: mine.nom, prenom: mine.prenom, matricule: mine.matricule };
+    attemptId = mine.id;
+    const { data: rs } = await sb.from('responses').select('question_id').eq('attempt_id', attemptId);
+    const answered = new Set((rs || []).map(r => r.question_id));
+    shuffled = shuffle(questions.filter(q => !answered.has(q.id)));
+    if (!shuffled.length) { await finish(); return; }
+    current = 0;
+    document.getElementById('resume-note').classList.remove('hidden');
+    show('quiz');
+    renderQuestion();
+    armAntiCheat();
+    return;
+  }
+
   identity = { nom, prenom, matricule };
   const { data, error } = await sb.from('attempts').insert({ session_id: sessionId, nom, prenom, matricule }).select().single();
-  if (error) { document.getElementById('join-msg').innerHTML = '<div class="msg err">Erreur : ' + error.message + '</div>'; return; }
+  if (error) {
+    msgBox.innerHTML = '<div class="msg err">Erreur : ' + error.message + '</div>';
+    document.getElementById('start-btn').disabled = false;
+    return;
+  }
   attemptId = data.id;
   // Ordre des questions aleatoire pour cet eleve
-  shuffled = questions.slice();
-  for (let i = shuffled.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
-  }
+  shuffled = shuffle(questions.slice());
   current = 0;
   show('quiz');
   renderQuestion();
@@ -147,7 +196,7 @@ async function finish() {
   finished = true;
   const { data: rs } = await sb.from('responses').select('correct').eq('attempt_id', attemptId);
   const score = (rs || []).filter(r => r.correct).length;
-  await sb.from('attempts').update({ status: 'done', score, total: shuffled.length, finished_at: new Date().toISOString() }).eq('id', attemptId);
+  await sb.from('attempts').update({ status: 'done', score, total: questions.length, finished_at: new Date().toISOString() }).eq('id', attemptId);
   show('end');
 }
 

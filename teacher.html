@@ -6,7 +6,9 @@
 <title>QuizLive - Espace professeur</title>
 <link rel="stylesheet" href="style.css">
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 <script src="config.js"></script>
+<script src="export.js"></script>
 </head>
 <body>
 <header class="topbar">
@@ -29,7 +31,27 @@
   <div id="app" class="hidden">
     <h1>Mes quiz</h1>
     <p class="sub">Lancez un quiz pour afficher le QR code, ou creez-en un nouveau.</p>
+
+    <!-- Choix de la classe au lancement -->
+    <div id="class-picker" class="card hidden" style="border-color:var(--accent)">
+      <h2 style="margin-top:0">Lancer &laquo; <span id="picker-quiz-title"></span> &raquo;</h2>
+      <p class="sub">Choisissez la classe pour cette session. Les resultats seront separes par classe.</p>
+      <div id="class-list"></div>
+      <label for="new-class">Nouvelle classe</label>
+      <div style="display:flex;gap:8px;align-items:center">
+        <input type="text" id="new-class" placeholder="Ex : 5TT A">
+        <button id="add-class" class="secondary" style="white-space:nowrap">Ajouter et lancer</button>
+      </div>
+      <div id="picker-msg"></div>
+      <br>
+      <button id="cancel-picker" class="secondary small">Annuler</button>
+    </div>
+
     <div id="quiz-list"><p class="sub">Chargement...</p></div>
+
+    <h2>Historique des sessions</h2>
+    <p class="sub">Sessions passees et en cours : quiz, classe, nombre d'eleves, resultats et export Excel.</p>
+    <div id="history-list"><p class="sub">Chargement...</p></div>
 
     <h2>Creer un quiz</h2>
     <div class="tabs">
@@ -79,6 +101,7 @@ function unlock() {
   gate.classList.add('hidden');
   app.classList.remove('hidden');
   loadQuizzes();
+  loadHistory();
 }
 document.getElementById('pin-btn').onclick = () => {
   const v = document.getElementById('pin').value.trim();
@@ -117,7 +140,7 @@ async function loadQuizzes() {
     const launch = document.createElement('button');
     launch.className = 'small';
     launch.textContent = 'Lancer (QR code)';
-    launch.onclick = () => launchQuiz(q.id);
+    launch.onclick = () => openClassPicker(q.id, q.title);
     const del = document.createElement('button');
     del.className = 'small danger';
     del.textContent = 'Supprimer';
@@ -132,10 +155,99 @@ async function loadQuizzes() {
   });
 }
 
-async function launchQuiz(quizId) {
-  const { data, error } = await sb.from('sessions').insert({ quiz_id: quizId }).select().single();
-  if (error) { alert('Erreur : ' + error.message); return; }
+// ---------- Choix de la classe au lancement ----------
+let pickerQuizId = null;
+
+async function openClassPicker(quizId, quizTitle) {
+  pickerQuizId = quizId;
+  document.getElementById('picker-quiz-title').textContent = quizTitle;
+  document.getElementById('picker-msg').innerHTML = '';
+  document.getElementById('new-class').value = '';
+  const picker = document.getElementById('class-picker');
+  picker.classList.remove('hidden');
+  picker.scrollIntoView({ behavior: 'smooth' });
+  const list = document.getElementById('class-list');
+  list.innerHTML = '<p class="sub">Chargement des classes...</p>';
+  const { data: classes, error } = await sb.from('classes').select('id,name').order('name');
+  if (error) { list.innerHTML = '<div class="msg err">Erreur : ' + error.message + '</div>'; return; }
+  if (!classes.length) {
+    list.innerHTML = '<p class="sub">Aucune classe pour le moment. Ajoutez-en une ci-dessous.</p>';
+    return;
+  }
+  list.innerHTML = '';
+  const wrap = document.createElement('div');
+  wrap.style.display = 'flex';
+  wrap.style.flexWrap = 'wrap';
+  wrap.style.gap = '8px';
+  wrap.style.marginBottom = '6px';
+  classes.forEach(c => {
+    const b = document.createElement('button');
+    b.className = 'small';
+    b.textContent = c.name;
+    b.onclick = () => launchInClass(c.id);
+    wrap.appendChild(b);
+  });
+  list.appendChild(wrap);
+}
+
+document.getElementById('cancel-picker').onclick = () => {
+  document.getElementById('class-picker').classList.add('hidden');
+  pickerQuizId = null;
+};
+
+document.getElementById('add-class').onclick = async () => {
+  const name = document.getElementById('new-class').value.trim();
+  const msg = document.getElementById('picker-msg');
+  if (!name) { msg.innerHTML = '<div class="msg err">Donnez un nom a la classe.</div>'; return; }
+  const { data, error } = await sb.from('classes').insert({ name }).select().single();
+  if (error) { msg.innerHTML = '<div class="msg err">Erreur : ' + error.message + '</div>'; return; }
+  launchInClass(data.id);
+};
+document.getElementById('new-class').addEventListener('keydown', e => { if (e.key === 'Enter') document.getElementById('add-class').click(); });
+
+async function launchInClass(classId) {
+  if (!pickerQuizId) return;
+  const { data, error } = await sb.from('sessions').insert({ quiz_id: pickerQuizId, class_id: classId }).select().single();
+  if (error) { document.getElementById('picker-msg').innerHTML = '<div class="msg err">Erreur : ' + error.message + '</div>'; return; }
   location.href = 'live.html?session=' + data.id;
+}
+
+// ---------- Historique des sessions ----------
+async function loadHistory() {
+  const box = document.getElementById('history-list');
+  const { data: sessions, error } = await sb.from('sessions').select('*').order('created_at', { ascending: false });
+  if (error) { box.innerHTML = '<div class="msg err">Erreur : ' + error.message + '</div>'; return; }
+  if (!sessions.length) { box.innerHTML = '<p class="sub">Aucune session pour le moment.</p>'; return; }
+  const { data: quizzes } = await sb.from('quizzes').select('id,title');
+  const { data: classes } = await sb.from('classes').select('id,name');
+  const { data: attempts } = await sb.from('attempts').select('session_id,status');
+  const quizById = {}, classById = {}, countBySession = {};
+  (quizzes || []).forEach(q => quizById[q.id] = q.title);
+  (classes || []).forEach(c => classById[c.id] = c.name);
+  (attempts || []).forEach(a => countBySession[a.session_id] = (countBySession[a.session_id] || 0) + 1);
+  box.innerHTML = '';
+  sessions.forEach(s => {
+    const quizTitle = quizById[s.quiz_id] || '(quiz supprime)';
+    const className = classById[s.class_id] || '(sans classe)';
+    const when = new Date(s.created_at).toLocaleString('fr-FR');
+    const div = document.createElement('div');
+    div.className = 'card quiz-item';
+    div.innerHTML = '<div><strong></strong><div class="meta"></div></div><div class="actions"></div>';
+    div.querySelector('strong').textContent = quizTitle + ' - ' + className;
+    div.querySelector('.meta').textContent = when + ' - ' + (countBySession[s.id] || 0) + ' eleve(s)' + (s.open ? ' - session ouverte' : ' - terminee');
+    const actions = div.querySelector('.actions');
+    const view = document.createElement('a');
+    view.className = 'btn small secondary';
+    view.textContent = 'Voir les resultats';
+    view.href = 'live.html?session=' + s.id;
+    const xls = document.createElement('button');
+    xls.className = 'small';
+    xls.textContent = 'Exporter en Excel';
+    xls.onclick = () => exportSessionXLSX(sb, s, quizTitle, className);
+    actions.appendChild(view);
+    actions.appendChild(xls);
+    box.appendChild(div);
+  });
 }
 
 // ---------- Creation manuelle ----------

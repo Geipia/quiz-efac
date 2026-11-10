@@ -6,8 +6,10 @@
 <title>QuizLive - Session en direct</title>
 <link rel="stylesheet" href="style.css">
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcode-generator/1.4.4/qrcode.min.js"></script>
 <script src="config.js"></script>
+<script src="export.js"></script>
 </head>
 <body>
 <header class="topbar">
@@ -29,8 +31,9 @@
       <div class="card">
         <h2 style="margin-top:0">Session</h2>
         <p class="sub" id="session-status">Session ouverte - les eleves peuvent rejoindre.</p>
-        <p class="sub">Questions dans un ordre different pour chaque eleve. Si un eleve quitte l'onglet ou la fenetre plus de 3 secondes, sa tentative est annulee et vous etes alerte ci-dessous.</p>
+        <p class="sub">Questions dans un ordre different pour chaque eleve. Un matricule ne peut participer qu'une fois. Si un eleve quitte l'onglet ou la fenetre plus de 3 secondes, sa tentative est annulee et vous etes alerte ci-dessous.</p>
         <button class="danger" id="close-session">Terminer la session</button>
+        <button id="export-xls" style="margin-left:8px">Exporter en Excel</button>
       </div>
     </div>
 
@@ -52,17 +55,23 @@ const sessionId = new URLSearchParams(location.search).get('session');
 if (!sessionId) { document.getElementById('loading').innerHTML = '<div class="msg err">Parametre "session" manquant dans l\'URL.</div>'; }
 
 let quiz = null, questions = [], attempts = {}, responsesByAttempt = {}, alertRows = [];
+let sessionRow = null, className = '';
 
 async function boot() {
   if (!sessionId) return;
-  const { data: sess, error } = await sb.from('sessions').select('id,quiz_id,open').eq('id', sessionId).single();
+  const { data: sess, error } = await sb.from('sessions').select('id,quiz_id,open,class_id,created_at').eq('id', sessionId).single();
   if (error || !sess) { document.getElementById('loading').innerHTML = '<div class="msg err">Session introuvable.</div>'; return; }
+  sessionRow = sess;
   const { data: q } = await sb.from('quizzes').select('id,title').eq('id', sess.quiz_id).single();
   quiz = q;
+  if (sess.class_id) {
+    const { data: c } = await sb.from('classes').select('name').eq('id', sess.class_id).single();
+    className = c ? c.name : '';
+  }
   const { data: qs } = await sb.from('questions').select('id').eq('quiz_id', sess.quiz_id);
   questions = qs || [];
 
-  document.getElementById('quiz-title').textContent = q.title;
+  document.getElementById('quiz-title').textContent = q.title + (className ? ' - ' + className : '');
   document.getElementById('loading').classList.add('hidden');
   document.getElementById('live').classList.remove('hidden');
   if (!sess.open) {
@@ -112,6 +121,10 @@ document.getElementById('close-session').onclick = async () => {
   await sb.from('sessions').update({ open: false }).eq('id', sessionId);
   document.getElementById('session-status').textContent = 'Session terminee.';
   document.getElementById('close-session').disabled = true;
+};
+
+document.getElementById('export-xls').onclick = () => {
+  exportSessionXLSX(sb, sessionRow, quiz ? quiz.title : 'quiz', className);
 };
 
 function flashTitle() {
