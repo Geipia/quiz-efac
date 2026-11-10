@@ -187,7 +187,10 @@ async function maybeReopenAfterReload() {
   const ts = parseInt(sessionStorage.getItem(key) || '0', 10);
   if (!ts) return;
   sessionStorage.removeItem(key);
-  if (Date.now() - ts < 15000 && !sessionRow.open) {
+  // Ne rouvrir que si ce chargement est vraiment un rechargement (F5) : un
+  // retour volontaire via "Voir les resultats" dans les 15 s ne rouvre pas.
+  const navType = (performance.getEntriesByType('navigation')[0] || {}).type;
+  if (navType === 'reload' && Date.now() - ts < 15000 && !sessionRow.open) {
     await sb.from('sessions').update({ open: true }).eq('id', sessionId);
     sessionRow.open = true;
   }
