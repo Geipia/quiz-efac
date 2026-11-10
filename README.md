@@ -1,6 +1,6 @@
 # QuizLive - Quiz en direct pour la classe
 
-Site statique (GitHub Pages) + backend Supabase. Le professeur cree un quiz, le lance, un QR code s'affiche ; les eleves scannent, s'identifient (nom, prenom, matricule EFAC) et repondent sur leur telephone. Le professeur voit les reponses arriver en direct.
+Site statique (GitHub Pages) + backend Supabase. Le professeur cree un quiz, le lance, un QR code s'affiche ; les eleves scannent, s'identifient (nom, prenom, matricule EPHEC) et repondent sur leur telephone. Le professeur voit les reponses arriver en direct.
 
 ## Fonctionnement
 
@@ -15,7 +15,7 @@ Site statique (GitHub Pages) + backend Supabase. Le professeur cree un quiz, le 
 
 ## Regles metier
 
-- **Identification eleve** : nom + prenom + matricule EFAC avant de commencer.
+- **Identification eleve** : nom + prenom + matricule EPHEC avant de commencer.
 - **Ordre aleatoire** : les questions sont melangees par eleve (Fisher-Yates, cote client).
 - **Anti-triche** : si l'eleve quitte l'onglet ou la fenetre (`visibilitychange` / `blur`) plus de **3 secondes**, sa tentative passe en `cancelled`, il est bloque, et une alerte avec son identite et la raison arrive en direct chez le professeur (table `alerts`).
 - **Temps reel** : Supabase Realtime sur `attempts`, `responses`, `alerts` (filtre par session).
