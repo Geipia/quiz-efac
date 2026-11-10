@@ -310,3 +310,79 @@ ol.steps li { margin-bottom: 6px; }
 .choice-btn:disabled:not(.picked) { opacity: .5; }
 h1, h2 { text-wrap: balance; }
 .card > h2:first-child { margin-top: 0 !important; }
+
+
+/* Carte Arena : visible uniquement sur l'ecran de fin eleve */
+#end .arena-ad {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  width: 100%;
+  max-width: 560px;
+  margin: 4px auto 0;
+  padding: 18px;
+  border: 1px solid rgba(255,90,54,.24);
+  border-radius: 22px;
+  background:
+    radial-gradient(260px 150px at 100% 0%, rgba(255,154,90,.22), transparent 75%),
+    linear-gradient(135deg, #fff 0%, #fff8f3 100%);
+  box-shadow: var(--shadow);
+  color: var(--ink);
+  text-align: left;
+  text-decoration: none;
+  transition: transform .2s ease, box-shadow .2s ease, border-color .2s ease;
+  animation: rise .45s .08s ease both;
+}
+#end .arena-ad:hover, #end .arena-ad:focus-visible {
+  transform: translateY(-2px);
+  border-color: rgba(255,90,54,.55);
+  box-shadow: 0 12px 32px rgba(29,26,51,.11);
+}
+.arena-ad__main { display: flex; align-items: center; gap: 14px; min-width: 0; }
+.arena-ad__logo {
+  display: block;
+  flex: 0 0 62px;
+  width: 62px;
+  height: 62px;
+  border-radius: 16px;
+  box-shadow: 0 5px 14px rgba(11,13,22,.2);
+}
+.arena-ad__copy { display: flex; flex-direction: column; align-items: flex-start; min-width: 0; }
+.arena-ad__eyebrow {
+  margin-bottom: 1px;
+  color: var(--accent2);
+  font-size: .7rem;
+  font-weight: 800;
+  letter-spacing: .09em;
+  text-transform: uppercase;
+}
+.arena-ad__name {
+  font-family: var(--display);
+  font-size: 1.2rem;
+  font-weight: 800;
+  line-height: 1.15;
+}
+.arena-ad__slogan { margin-top: 5px; color: var(--muted); font-size: .88rem; line-height: 1.35; }
+.arena-ad__cta {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 6px;
+  padding: 9px 13px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: #fff;
+  font-size: .84rem;
+  font-weight: 800;
+  box-shadow: 0 5px 14px rgba(255,90,54,.24);
+}
+.arena-ad__cta span { font-size: 1rem; }
+@media (max-width: 520px) {
+  #end .arena-ad { gap: 12px; padding: 15px; border-radius: 19px; }
+  .arena-ad__main { gap: 11px; }
+  .arena-ad__logo { flex-basis: 54px; width: 54px; height: 54px; border-radius: 14px; }
+  .arena-ad__name { font-size: 1.1rem; }
+  .arena-ad__slogan { font-size: .81rem; }
+  .arena-ad__cta { padding: 8px 10px; font-size: .78rem; }
+}
