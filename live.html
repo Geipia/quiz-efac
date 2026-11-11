@@ -56,6 +56,11 @@
       </table>
     </div>
 
+    <div id="answer-key" class="card hidden" style="margin-top:24px">
+      <h2 style="margin-top:0">Corrige - toutes les questions</h2>
+      <div id="answer-key-items"></div>
+    </div>
+
     <div id="delete-zone" class="hidden" style="margin-top:28px;text-align:center">
       <button class="danger" id="delete-session">Supprimer cette session et ses resultats</button>
       <div id="delete-confirm" class="hidden">
@@ -92,7 +97,7 @@ async function boot() {
     const { data: c } = await sb.from('classes').select('name').eq('id', sess.class_id).single();
     className = c ? c.name : '';
   }
-  const { data: qs } = await sb.from('questions').select('id').eq('quiz_id', sess.quiz_id);
+  const { data: qs } = await sb.from('questions').select('id,text,choices,correct_index,ord').eq('quiz_id', sess.quiz_id).order('ord');
   questions = qs || [];
 
   document.getElementById('quiz-title').textContent = q.title + (className ? ' - ' + className : '');
@@ -102,6 +107,7 @@ async function boot() {
     document.getElementById('session-status').textContent = 'Session terminee.';
     document.getElementById('close-session').disabled = true;
     document.getElementById('delete-zone').classList.remove('hidden');
+    renderAnswerKey();
   } else {
     armAutoClose();
   }
@@ -178,7 +184,31 @@ document.getElementById('close-yes').onclick = async () => {
   closeButton.classList.remove('hidden');
   closeConfirm.classList.add('hidden');
   document.getElementById('delete-zone').classList.remove('hidden');
+  renderAnswerKey();
 };
+
+function renderAnswerKey() {
+  const box = document.getElementById('answer-key-items');
+  box.innerHTML = '';
+  questions.forEach((q, questionIndex) => {
+    const section = document.createElement('section');
+    section.style.marginBottom = '18px';
+    const title = document.createElement('h3');
+    title.textContent = 'Question ' + (questionIndex + 1) + ' : ' + q.text;
+    section.appendChild(title);
+    const list = document.createElement('ol');
+    list.type = 'A';
+    q.choices.forEach((choice, choiceIndex) => {
+      const item = document.createElement('li');
+      item.textContent = String(choice) + (choiceIndex === q.correct_index ? ' - Bonne reponse' : '');
+      if (choiceIndex === q.correct_index) item.style.fontWeight = '700';
+      list.appendChild(item);
+    });
+    section.appendChild(list);
+    box.appendChild(section);
+  });
+  document.getElementById('answer-key').classList.remove('hidden');
+}
 
 // ---------- Suppression d'une session terminee ----------
 // Pas de confirm() natif : il est bloque ou ignore silencieusement dans
