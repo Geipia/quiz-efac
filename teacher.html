@@ -149,13 +149,67 @@ async function loadQuizzes() {
     const del = document.createElement('button');
     del.className = 'small danger';
     del.textContent = 'Supprimer';
-    del.onclick = async () => {
-      if (!confirm('Supprimer ce quiz et ses questions ?')) return;
-      await sb.from('quizzes').delete().eq('id', q.id);
-      loadQuizzes();
+    const delConfirm = document.createElement('div');
+    delConfirm.className = 'quiz-delete-confirm hidden';
+    delConfirm.style.cssText = 'flex:1 1 100%;width:100%;margin-top:12px;text-align:right';
+    const delQuestion = document.createElement('p');
+    delQuestion.style.fontWeight = '600';
+    delQuestion.textContent = 'Supprimer definitivement ce quiz, ses questions et toutes ses sessions et leurs resultats ? Cette action est irreversible.';
+    const delYes = document.createElement('button');
+    delYes.className = 'small danger';
+    delYes.textContent = 'Oui, supprimer definitivement';
+    const delNo = document.createElement('button');
+    delNo.className = 'small secondary';
+    delNo.style.marginLeft = '8px';
+    delNo.textContent = 'Annuler';
+    const delError = document.createElement('div');
+    delError.className = 'msg err hidden';
+    delError.style.marginTop = '10px';
+    delConfirm.appendChild(delQuestion);
+    delConfirm.appendChild(delYes);
+    delConfirm.appendChild(delNo);
+    delConfirm.appendChild(delError);
+    del.onclick = () => {
+      del.classList.add('hidden');
+      launch.disabled = true;
+      delConfirm.classList.remove('hidden');
+      delError.classList.add('hidden');
+      delError.textContent = '';
+    };
+    delNo.onclick = () => {
+      delConfirm.classList.add('hidden');
+      del.classList.remove('hidden');
+      launch.disabled = false;
+      delError.classList.add('hidden');
+    };
+    delYes.onclick = async () => {
+      delYes.disabled = true;
+      delYes.textContent = 'Suppression...';
+      delError.classList.add('hidden');
+      delError.textContent = '';
+      // Le schema Supabase fait cascader quizzes vers questions/sessions, puis sessions vers les resultats lies.
+      const { data: deleted, error } = await sb.from('quizzes').delete().eq('id', q.id).select('id');
+      if (error) {
+        delError.textContent = 'Erreur pendant la suppression (quizzes) : ' + error.message;
+        delError.classList.remove('hidden');
+        delYes.disabled = false;
+        delYes.textContent = 'Oui, supprimer definitivement';
+        launch.disabled = false;
+        return;
+      }
+      if (!deleted || deleted.length === 0) {
+        delError.textContent = "Aucun quiz n'a ete supprime. Verifiez que le quiz existe encore.";
+        delError.classList.remove('hidden');
+        delYes.disabled = false;
+        delYes.textContent = 'Oui, supprimer definitivement';
+        launch.disabled = false;
+        return;
+      }
+      await Promise.all([loadQuizzes(), loadHistory()]);
     };
     actions.appendChild(launch);
     actions.appendChild(del);
+    div.appendChild(delConfirm);
     box.appendChild(div);
   });
 }
