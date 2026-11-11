@@ -36,6 +36,12 @@
         <p class="sub" id="timer-info"></p>
         <p class="sub">Questions dans un ordre different pour chaque eleve. Un matricule ne peut participer qu'une fois. Si un eleve quitte l'onglet ou la fenetre plus de 3 secondes, sa tentative est annulee et vous etes alerte ci-dessous.</p>
         <button class="danger" id="close-session">Terminer la session</button>
+        <div id="close-confirm" class="hidden" style="margin-top:12px">
+          <p style="font-weight:600">Terminer cette session ? Les eleves ne pourront plus la rejoindre.</p>
+          <button class="danger" id="close-yes">Oui, terminer la session</button>
+          <button id="close-no" style="margin-left:8px">Annuler</button>
+          <div id="close-error" class="msg err hidden" style="margin-top:10px"></div>
+        </div>
         <button id="export-xls" style="margin-left:8px">Exporter en Excel</button>
       </div>
     </div>
@@ -137,13 +143,40 @@ async function boot() {
     .subscribe();
 }
 
-document.getElementById('close-session').onclick = async () => {
-  if (!confirm('Terminer la session ? Les eleves ne pourront plus la rejoindre.')) return;
+const closeButton = document.getElementById('close-session');
+const closeConfirm = document.getElementById('close-confirm');
+const closeError = document.getElementById('close-error');
+closeButton.onclick = () => {
+  closeButton.classList.add('hidden');
+  closeConfirm.classList.remove('hidden');
+  closeError.classList.add('hidden');
+};
+document.getElementById('close-no').onclick = () => {
+  closeConfirm.classList.add('hidden');
+  closeButton.classList.remove('hidden');
+  closeError.classList.add('hidden');
+};
+document.getElementById('close-yes').onclick = async () => {
+  const yes = document.getElementById('close-yes');
+  yes.disabled = true;
+  yes.textContent = 'Terminaison...';
+  closeError.classList.add('hidden');
+  closeError.textContent = '';
+  const { data: ended, error } = await sb.from('sessions').update({ open: false }).eq('id', sessionId).select('id').single();
+  if (error || !ended) {
+    closeError.textContent = 'Erreur pendant la fermeture de la session : ' + (error ? error.message : 'aucune session modifiee.');
+    closeError.classList.remove('hidden');
+    yes.disabled = false;
+    yes.textContent = 'Oui, terminer la session';
+    return;
+  }
   closedManually = true;
-  await sb.from('sessions').update({ open: false }).eq('id', sessionId);
   sessionRow.open = false;
   document.getElementById('session-status').textContent = 'Session terminee.';
-  document.getElementById('close-session').disabled = true;
+  closeButton.textContent = 'Session terminee.';
+  closeButton.disabled = true;
+  closeButton.classList.remove('hidden');
+  closeConfirm.classList.add('hidden');
   document.getElementById('delete-zone').classList.remove('hidden');
 };
 
