@@ -386,3 +386,20 @@ h1, h2 { text-wrap: balance; }
   .arena-ad__slogan { font-size: .81rem; }
   .arena-ad__cta { padding: 8px 10px; font-size: .78rem; }
 }
+
+/* Navigation libre et correction finale */
+.quiz-nav { display:flex; gap:10px; flex-wrap:wrap; margin:18px 0; }
+.quiz-nav > button { flex:1; padding:12px; min-width:120px; }
+.question-nav { display:flex; flex-wrap:wrap; gap:8px; margin:20px 0 14px; }
+.question-jump { min-width:44px; min-height:44px; padding:8px; background:var(--bg2); color:var(--ink); box-shadow:none; border:2px solid transparent; }
+.question-jump.answered { background:#ebe7ff; color:#3a26a8; }
+.question-jump.current { border-color:var(--accent); }
+.correction { text-align:left; margin:26px 0; }
+.correction-item { background:var(--card); border:1px solid var(--line); border-left:5px solid var(--green); border-radius:14px; padding:18px; margin:14px 0; overflow-wrap:anywhere; }
+.correction-item.is-wrong { border-left-color:var(--red); }
+.correction-item h3 { font-size:1.05rem; margin-bottom:10px; }
+.correction-item > strong { color:#0b6b47; display:block; margin-bottom:6px; }
+.correction-item.is-wrong > strong { color:#a3182d; }
+.teacher-detail { margin-top:14px; text-align:left; }
+.teacher-detail summary { cursor:pointer; font-weight:700; padding:10px 0; }
+.results-wrap { overflow-x:auto; }
