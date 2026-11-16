@@ -6,7 +6,7 @@
 <title>QuizLive - Session en direct</title>
 <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,700;12..96,800&family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
 <meta name="theme-color" content="#fbf8f3">
-<link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="style.css?v=final-review-1">
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcode-generator/1.4.4/qrcode.min.js"></script>
@@ -34,7 +34,7 @@
         <h2 style="margin-top:0">Session</h2>
         <p class="sub" id="session-status">Session ouverte - les eleves peuvent rejoindre.</p>
         <p class="sub" id="timer-info"></p>
-        <p class="sub">Questions dans un ordre different pour chaque eleve. Un matricule ne peut participer qu'une fois. Si un eleve quitte l'onglet ou la fenetre plus de 3 secondes, sa tentative est annulee et vous etes alerte ci-dessous.</p>
+        <p class="sub">Les choix restent modifiables et ne sont envoyes qu'a la validation finale (ou a la fin du chrono). Questions dans un ordre different pour chaque eleve. Un matricule ne peut participer qu'une fois. Si un eleve quitte l'onglet ou la fenetre plus de 3 secondes, sa tentative est annulee et vous etes alerte ci-dessous.</p>
         <button class="danger" id="close-session">Terminer la session</button>
         <div id="close-confirm" class="hidden" style="margin-top:12px">
           <p style="font-weight:600">Terminer cette session ? Les eleves ne pourront plus la rejoindre.</p>
@@ -49,15 +49,21 @@
     <div id="alerts"></div>
 
     <h2>Resultats en direct <span id="nb-eleves" class="badge active"></span></h2>
-    <div class="card">
+    <div class="card results-wrap">
       <table class="results">
         <thead><tr><th>Eleve</th><th>Matricule</th><th>Progression</th><th>Score</th><th>Statut</th></tr></thead>
         <tbody id="results-body"><tr><td colspan="5" style="color:var(--muted)">En attente des eleves...</td></tr></tbody>
       </table>
     </div>
 
+    <div id="student-details" class="card">
+      <h2>Détail par élève</h2>
+      <p class="sub">Les réponses et les corrections apparaissent après la validation du questionnaire par l'élève.</p>
+      <div id="student-detail-items"></div>
+    </div>
+
     <div id="answer-key" class="card hidden" style="margin-top:24px">
-      <h2 style="margin-top:0">Corrige - toutes les questions</h2>
+      <h2 style="margin-top:0">Bilan par question et corrigé</h2>
       <div id="answer-key-items"></div>
     </div>
 
@@ -137,9 +143,12 @@ async function boot() {
     .on('postgres_changes', { event: '*', schema: 'public', table: 'attempts', filter: 'session_id=eq.' + sessionId }, p => {
       attempts[p.new.id] = p.new; render();
     })
-    .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'responses', filter: 'session_id=eq.' + sessionId }, p => {
-      const r = p.new;
-      (responsesByAttempt[r.attempt_id] = responsesByAttempt[r.attempt_id] || []).push(r);
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'responses', filter: 'session_id=eq.' + sessionId }, p => {
+      const r = p.eventType === 'DELETE' ? p.old : p.new;
+      if (!r.attempt_id) return;
+      const rows = responsesByAttempt[r.attempt_id] || [];
+      responsesByAttempt[r.attempt_id] = rows.filter(old => old.id !== r.id);
+      if (p.eventType !== 'DELETE') responsesByAttempt[r.attempt_id].push(r);
       render();
     })
     .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'alerts', filter: 'session_id=eq.' + sessionId }, p => {
@@ -187,6 +196,43 @@ document.getElementById('close-yes').onclick = async () => {
   renderAnswerKey();
 };
 
+// Details calcules avec les index d'origine, jamais avec les lettres affichees
+// dans l'ordre melange propre a chaque eleve.
+function renderStudentDetails() {
+  const box = document.getElementById('student-detail-items');
+  const expanded = new Set([...box.querySelectorAll('details[open]')].map(d => d.dataset.attempt));
+  box.innerHTML = '';
+  const completed = Object.values(attempts).filter(a => a.status === 'done');
+  if (!completed.length) { box.textContent = 'Aucun questionnaire validé pour le moment.'; return; }
+  completed.forEach(a => {
+    const details = document.createElement('details');
+    details.className = 'teacher-detail';
+    details.dataset.attempt = a.id;
+    details.open = expanded.has(a.id);
+    const summary = document.createElement('summary');
+    summary.textContent = a.prenom + ' ' + a.nom + ' · ' + a.matricule + ' · ' + a.score + ' / ' + questions.length;
+    details.appendChild(summary);
+    const rs = responsesByAttempt[a.id] || [];
+    questions.forEach((q, i) => {
+      const r = rs.find(row => row.question_id === q.id);
+      const right = r && r.choice_index === q.correct_index;
+      const section = document.createElement('section');
+      section.className = 'correction-item ' + (right ? 'is-right' : 'is-wrong');
+      const title = document.createElement('h3');
+      title.textContent = (i + 1) + '. ' + q.text;
+      const status = document.createElement('strong');
+      status.textContent = right ? 'Réussi' : 'Incorrect';
+      const answer = document.createElement('p');
+      answer.textContent = "Réponse de l'élève : " + (r ? q.choices[r.choice_index] : 'Sans réponse');
+      const correct = document.createElement('p');
+      correct.textContent = 'Bonne réponse : ' + q.choices[q.correct_index];
+      section.append(title, status, answer, correct);
+      details.appendChild(section);
+    });
+    box.appendChild(details);
+  });
+}
+
 function renderAnswerKey() {
   const box = document.getElementById('answer-key-items');
   box.innerHTML = '';
@@ -205,6 +251,15 @@ function renderAnswerKey() {
       list.appendChild(item);
     });
     section.appendChild(list);
+    const completed = Object.values(attempts).filter(a => a.status === 'done');
+    const answers = completed.map(a => (responsesByAttempt[a.id] || []).find(r => r.question_id === q.id));
+    const right = answers.filter(r => r && r.choice_index === q.correct_index).length;
+    const wrong = answers.filter(r => r && r.choice_index !== q.correct_index).length;
+    const missing = answers.filter(r => !r).length;
+    const stats = document.createElement('p');
+    stats.className = 'msg info';
+    stats.textContent = right + ' réussi(s) · ' + wrong + ' incorrect(s) · ' + missing + ' sans réponse / ' + completed.length + ' questionnaire(s) validé(s)';
+    section.appendChild(stats);
     box.appendChild(section);
   });
   document.getElementById('answer-key').classList.remove('hidden');
@@ -327,6 +382,9 @@ function render() {
     abox.innerHTML = '';
   }
 
+  renderStudentDetails();
+  if (sessionRow && !sessionRow.open) renderAnswerKey();
+
   // Tableau resultats
   const tbody = document.getElementById('results-body');
   const list = Object.values(attempts).sort((a, b) => a.started_at < b.started_at ? -1 : 1);
@@ -338,13 +396,14 @@ function render() {
   tbody.innerHTML = '';
   list.forEach(a => {
     const rs = responsesByAttempt[a.id] || [];
-    const score = rs.filter(r => r.correct).length;
+    const score = questions.filter(q => rs.some(r => r.question_id === q.id && r.choice_index === q.correct_index)).length;
     const tr = document.createElement('tr');
     let status, cls;
     if (a.status === 'cancelled') { status = 'ANNULE'; cls = 'cancelled'; }
     else if (a.status === 'done') { status = 'Termine'; cls = 'done'; }
     else { status = 'En cours'; cls = 'active'; }
     tr.innerHTML = '<td></td><td></td><td>' + rs.length + ' / ' + questions.length + '</td><td>' + score + ' / ' + questions.length + '</td><td><span class="badge ' + cls + '">' + status + '</span></td>';
+    if (a.status !== 'done' && a.status !== 'cancelled') { tr.children[2].textContent = 'Non validé'; tr.children[3].textContent = 'En attente'; }
     tr.children[0].textContent = a.prenom + ' ' + a.nom;
     tr.children[1].textContent = a.matricule;
     tbody.appendChild(tr);
