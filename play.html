@@ -67,10 +67,9 @@
   <!-- Fin -->
   <div id="end" class="hidden center">
     <div class="card">
-      <h1 id="end-title">Reponses envoyees</h1>
-      <p class="sub" id="end-sub">Merci ! Votre professeur voit vos reponses en direct.</p>
+      <h1 id="end-title">Merci !</h1>
+      <p class="sub" id="end-sub">Votre questionnaire a été envoyé. Vos réponses ne sont plus modifiables.</p>
     </div>
-    <div id="correction" class="correction"></div>
     <a class="arena-ad" href="https://arena.eraz.ovh" target="_blank" rel="noopener noreferrer" aria-label="Découvrir Arena 360, les résultats de foot et de cyclisme">
       <div class="arena-ad__main">
         <img class="arena-ad__logo" src="arena-mark.svg" alt="Logo Arena 360">
@@ -304,34 +303,10 @@ document.getElementById('keep-editing').onclick = () => goTo(current);
 document.getElementById('confirm-send').onclick = () => finish();
 document.getElementById('retry-send').onclick = () => finish(deadline && Date.now() >= deadline);
 
-function renderCorrection(score) {
-  const box = document.getElementById('correction');
-  box.innerHTML = '';
-  const heading = document.createElement('h2');
-  heading.textContent = 'Votre corrigé : ' + score + ' / ' + questions.length;
-  box.appendChild(heading);
-  shuffled.forEach((q, i) => {
-    const chosen = choicesByQuestion[q.id];
-    const right = chosen === q.correct_index;
-    const section = document.createElement('section');
-    section.className = 'correction-item ' + (right ? 'is-right' : 'is-wrong');
-    const title = document.createElement('h3');
-    title.textContent = (i + 1) + '. ' + q.text;
-    const status = document.createElement('strong');
-    status.textContent = right ? 'Réussi' : 'Incorrect';
-    const yours = document.createElement('p');
-    yours.textContent = 'Votre réponse : ' + (Number.isInteger(chosen) ? q.choices[chosen] : 'Sans réponse');
-    const correct = document.createElement('p');
-    correct.textContent = 'Bonne réponse : ' + q.choices[q.correct_index];
-    section.append(title, status, yours, correct);
-    box.appendChild(section);
-  });
-}
-
 async function finish(timeUp) {
   if (finished || cancelledFlag || submitting) return;
-  // Verrouiller le meme instantane pour tous les essais reseau. Aucune bonne
-  // reponse n'est montree avant confirmation de la sauvegarde complete.
+  // Verrouiller le meme instantane pour tous les essais reseau. Le detail des
+  // resultats reste reserve au professeur, sans correction cote eleve.
   locked = true;
   submitting = true;
   saveDraft();
@@ -377,13 +352,11 @@ async function finish(timeUp) {
     if (verifyError) throw verifyError;
     choicesByQuestion = {};
     (stored || []).forEach(r => choicesByQuestion[r.question_id] = r.choice_index);
-    const score = questions.filter(q => choicesByQuestion[q.id] === q.correct_index).length;
     finished = true;
     document.getElementById('timer').classList.add('hidden');
     document.getElementById('timer-alert').classList.add('hidden');
-    document.getElementById('end-title').textContent = timeUp ? 'Temps écoulé !' : 'Questionnaire validé';
-    document.getElementById('end-sub').textContent = 'Vos réponses ont été envoyées. Elles ne sont plus modifiables.';
-    renderCorrection(score);
+    document.getElementById('end-title').textContent = 'Merci !';
+    document.getElementById('end-sub').textContent = 'Votre questionnaire a été envoyé. Vos réponses ne sont plus modifiables.';
     try { localStorage.removeItem(draftKey()); } catch (e) { /* Sans effet sur l'envoi. */ }
     show('end');
     window.scrollTo(0, 0);
