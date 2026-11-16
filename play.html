@@ -6,7 +6,7 @@
 <title>QuizLive - Repondre au quiz</title>
 <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,700;12..96,800&family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
 <meta name="theme-color" content="#fbf8f3">
-<link rel="stylesheet" href="style.css?v=arena-ad">
+<link rel="stylesheet" href="style.css?v=final-review-1">
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
 <script src="config.js"></script>
 </head>
@@ -38,11 +38,28 @@
   <div id="quiz" class="hidden">
     <div id="timer" class="quiz-timer hidden">--:--</div>
     <div id="timer-alert" class="timer-alert hidden">Plus que 30 secondes !</div>
-    <div id="resume-note" class="msg info hidden">Reprise de votre tentative en cours : vos reponses deja envoyees sont conservees.</div>
+    <div id="resume-note" class="msg info hidden">Reprise de votre tentative en cours : vos choix sont conserves et restent modifiables avant la validation finale.</div>
     <p class="progress-line" id="progress"></p>
     <div class="card">
       <h1 id="qtext"></h1>
-      <div id="choices"></div>
+      <div id="choices" role="group" aria-label="Choix de réponse"></div>
+      <div class="quiz-nav">
+        <button id="prev-btn" class="secondary">Précédente</button>
+        <button id="next-btn">Suivante</button>
+      </div>
+      <nav id="question-nav" class="question-nav" aria-label="Aller à une question"></nav>
+      <p id="draft-note" class="sub" role="status">Vos choix restent modifiables jusqu'à la validation finale.</p>
+      <div id="submit-zone" class="hidden">
+        <p id="submit-summary" class="sub"></p>
+        <button id="submit-btn" style="width:100%">Valider le questionnaire</button>
+        <div id="submit-confirm" class="msg info hidden">
+          <p id="confirm-summary"></p>
+          <p>Après l'envoi, vous ne pourrez plus modifier vos réponses.</p>
+          <div class="quiz-nav"><button id="confirm-send">Confirmer l'envoi</button><button id="keep-editing" class="secondary">Revoir mes choix</button></div>
+        </div>
+      </div>
+      <div id="submit-error" class="msg err hidden" role="alert"></div>
+      <button id="retry-send" class="hidden">Réessayer l'envoi</button>
     </div>
     <p class="sub" style="font-size:.85rem">Restez sur cette page. Quitter l'onglet ou la fenetre plus de 3 secondes annule votre tentative.</p>
   </div>
@@ -53,6 +70,7 @@
       <h1 id="end-title">Reponses envoyees</h1>
       <p class="sub" id="end-sub">Merci ! Votre professeur voit vos reponses en direct.</p>
     </div>
+    <div id="correction" class="correction"></div>
     <a class="arena-ad" href="https://arena.eraz.ovh" target="_blank" rel="noopener noreferrer" aria-label="Découvrir Arena 360, les résultats de foot et de cyclisme">
       <div class="arena-ad__main">
         <img class="arena-ad__logo" src="arena-mark.svg" alt="Logo Arena 360">
@@ -83,6 +101,22 @@ const sessionId = new URLSearchParams(location.search).get('session');
 let session = null, questions = [], shuffled = [], current = 0;
 let attemptId = null, identity = null, finished = false, cancelledFlag = false;
 let quizTimerSec = null, deadline = null, timerInt = null, warned30 = false;
+let choicesByQuestion = {}, submitting = false, locked = false;
+const draftKey = () => 'ql-draft-v2-' + attemptId;
+function saveDraft() {
+  try { localStorage.setItem(draftKey(), JSON.stringify({ choices: choicesByQuestion, current, locked })); }
+  catch (e) { document.getElementById('draft-note').textContent = "Sauvegarde locale indisponible : ne rechargez pas avant l'envoi."; }
+}
+function restoreDraft() {
+  try {
+    const draft = JSON.parse(localStorage.getItem(draftKey()) || 'null');
+    if (draft) {
+      questions.forEach(q => { const n = draft.choices[q.id]; if (Number.isInteger(n) && n >= 0 && n < q.choices.length) choicesByQuestion[q.id] = n; });
+      current = Math.max(0, Math.min(shuffled.length - 1, draft.current || 0));
+      locked = !!draft.locked;
+    }
+  } catch (e) { /* Un brouillon illisible ne bloque pas la reprise. */ }
+}
 
 // Le matricule est l'identifiant unique de l'eleve : on normalise pour comparer
 // (espaces en trop et majuscules/minuscules ignores).
@@ -171,21 +205,22 @@ document.getElementById('start-btn').onclick = async () => {
     return;
   }
   if (mine) {
-    // Choix : une tentative en cours (page rechargee, pas annulee) est reprise
-    // la ou elle en etait, au lieu d'etre bloquee. Les reponses deja envoyees
-    // sont conservees, les questions restantes sont re-melangees.
+    // Reprise : garder toutes les questions accessibles, y compris les anciennes
+    // reponses envoyees par la version precedente du site.
     identity = { nom: mine.nom, prenom: mine.prenom, matricule: mine.matricule };
     attemptId = mine.id;
-    const { data: rs } = await sb.from('responses').select('question_id').eq('attempt_id', attemptId);
-    const answered = new Set((rs || []).map(r => r.question_id));
-    shuffled = shuffle(questions.filter(q => !answered.has(q.id)));
-    if (!shuffled.length) { await finish(); return; }
-    startTimer(mine.started_at);
+    const { data: rs, error: resumeError } = await sb.from('responses').select('*').eq('attempt_id', attemptId);
+    if (resumeError) { msgBox.textContent = 'Reprise impossible pour le moment. Réessayez.'; document.getElementById('start-btn').disabled = false; return; }
+    (rs || []).forEach(r => choicesByQuestion[r.question_id] = r.choice_index);
+    shuffled = seededShuffle(questions, attemptId + ':questions');
     current = 0;
+    restoreDraft();
     document.getElementById('resume-note').classList.remove('hidden');
     show('quiz');
     renderQuestion();
     armAntiCheat();
+    if (locked) { finish(); return; }
+    startTimer(mine.started_at);
     return;
   }
 
@@ -197,13 +232,14 @@ document.getElementById('start-btn').onclick = async () => {
     return;
   }
   attemptId = data.id;
-  startTimer(data.started_at);
-  // Ordre des questions aleatoire pour cet eleve
-  shuffled = shuffle(questions.slice());
+  // Ordre stable au rechargement et different pour chaque tentative.
+  shuffled = seededShuffle(questions, attemptId + ':questions');
   current = 0;
   show('quiz');
   renderQuestion();
   armAntiCheat();
+  saveDraft();
+  startTimer(data.started_at);
 };
 
 function renderQuestion() {
@@ -212,48 +248,151 @@ function renderQuestion() {
   document.getElementById('qtext').textContent = q.text;
   const box = document.getElementById('choices');
   box.innerHTML = '';
-  shuffledChoices(q).forEach((choice, displayIndex) => {
+  shuffledChoices(q).forEach(choice => {
     const b = document.createElement('button');
-    b.className = 'choice-btn';
-    b.textContent = String.fromCharCode(65 + displayIndex) + '. ' + choice.text;
-    b.onclick = () => answer(q, choice.originalIndex, b);
+    const picked = choicesByQuestion[q.id] === choice.originalIndex;
+    b.className = 'choice-btn' + (picked ? ' picked' : '');
+    b.textContent = choice.text;
+    b.setAttribute('aria-pressed', String(picked));
+    b.disabled = locked;
+    b.onclick = () => {
+      if (cancelledFlag || finished || locked) return;
+      choicesByQuestion[q.id] = choice.originalIndex;
+      saveDraft();
+      renderQuestion();
+    };
     box.appendChild(b);
   });
-}
-
-async function answer(q, choiceIndex, btn) {
-  if (cancelledFlag || finished) return;
-  [...document.getElementById('choices').children].forEach(b => b.disabled = true);
-  btn.classList.add('picked');
-  const correct = choiceIndex === q.correct_index;
-  await sb.from('responses').insert({
-    attempt_id: attemptId,
-    session_id: sessionId,
-    question_id: q.id,
-    choice_index: choiceIndex,
-    correct
+  document.getElementById('prev-btn').disabled = current === 0 || locked;
+  document.getElementById('next-btn').disabled = current === shuffled.length - 1 || locked;
+  const nav = document.getElementById('question-nav');
+  nav.innerHTML = '';
+  shuffled.forEach((question, i) => {
+    const btn = document.createElement('button');
+    const answered = Number.isInteger(choicesByQuestion[question.id]);
+    btn.textContent = String(i + 1);
+    btn.className = 'question-jump' + (answered ? ' answered' : '') + (i === current ? ' current' : '');
+    btn.setAttribute('aria-label', 'Question ' + (i + 1) + (answered ? ', réponse choisie' : ', sans réponse'));
+    if (i === current) btn.setAttribute('aria-current', 'step');
+    btn.disabled = locked;
+    btn.onclick = () => goTo(i);
+    nav.appendChild(btn);
   });
-  setTimeout(() => {
-    current++;
-    if (current >= shuffled.length) finish();
-    else renderQuestion();
-  }, 350);
+  const count = questions.filter(q => Number.isInteger(choicesByQuestion[q.id])).length;
+  document.getElementById('submit-summary').textContent = count + ' / ' + questions.length + ' réponses choisies. Vous pouvez encore tout revoir.';
+  document.getElementById('submit-zone').classList.toggle('hidden', current !== shuffled.length - 1 || locked);
+}
+function goTo(index) {
+  if (locked || finished || cancelledFlag) return;
+  current = index;
+  document.getElementById('submit-confirm').classList.add('hidden');
+  document.getElementById('submit-btn').classList.remove('hidden');
+  saveDraft();
+  renderQuestion();
+}
+document.getElementById('prev-btn').onclick = () => goTo(current - 1);
+document.getElementById('next-btn').onclick = () => goTo(current + 1);
+document.getElementById('submit-btn').onclick = () => {
+  const missing = questions.filter(q => !Number.isInteger(choicesByQuestion[q.id])).length;
+  document.getElementById('confirm-summary').textContent = missing
+    ? missing + ' question(s) sans réponse, comptée(s) comme incorrecte(s). Envoyer quand même ?'
+    : 'Toutes les questions ont une réponse. Envoyer votre questionnaire ?';
+  document.getElementById('submit-confirm').classList.remove('hidden');
+  document.getElementById('submit-btn').classList.add('hidden');
+};
+document.getElementById('keep-editing').onclick = () => goTo(current);
+document.getElementById('confirm-send').onclick = () => finish();
+document.getElementById('retry-send').onclick = () => finish(deadline && Date.now() >= deadline);
+
+function renderCorrection(score) {
+  const box = document.getElementById('correction');
+  box.innerHTML = '';
+  const heading = document.createElement('h2');
+  heading.textContent = 'Votre corrigé : ' + score + ' / ' + questions.length;
+  box.appendChild(heading);
+  shuffled.forEach((q, i) => {
+    const chosen = choicesByQuestion[q.id];
+    const right = chosen === q.correct_index;
+    const section = document.createElement('section');
+    section.className = 'correction-item ' + (right ? 'is-right' : 'is-wrong');
+    const title = document.createElement('h3');
+    title.textContent = (i + 1) + '. ' + q.text;
+    const status = document.createElement('strong');
+    status.textContent = right ? 'Réussi' : 'Incorrect';
+    const yours = document.createElement('p');
+    yours.textContent = 'Votre réponse : ' + (Number.isInteger(chosen) ? q.choices[chosen] : 'Sans réponse');
+    const correct = document.createElement('p');
+    correct.textContent = 'Bonne réponse : ' + q.choices[q.correct_index];
+    section.append(title, status, yours, correct);
+    box.appendChild(section);
+  });
 }
 
 async function finish(timeUp) {
-  finished = true;
+  if (finished || cancelledFlag || submitting) return;
+  // Verrouiller le meme instantane pour tous les essais reseau. Aucune bonne
+  // reponse n'est montree avant confirmation de la sauvegarde complete.
+  locked = true;
+  submitting = true;
+  saveDraft();
   if (timerInt) { clearInterval(timerInt); timerInt = null; }
-  document.getElementById('timer').classList.add('hidden');
-  document.getElementById('timer-alert').classList.add('hidden');
-  const { data: rs } = await sb.from('responses').select('correct').eq('attempt_id', attemptId);
-  const score = (rs || []).filter(r => r.correct).length;
-  await sb.from('attempts').update({ status: 'done', score, total: questions.length, finished_at: new Date().toISOString() }).eq('id', attemptId);
-  if (timeUp) {
-    // Choix : a 0 seconde, les reponses deja donnees sont envoyees telles quelles.
-    document.getElementById('end-title').textContent = 'Temps ecoule !';
-    document.getElementById('end-sub').textContent = 'Le chrono est termine : vos reponses deja donnees ont ete envoyees.';
-  }
-  show('end');
+  renderQuestion();
+  document.getElementById('submit-error').classList.add('hidden');
+  document.getElementById('retry-send').classList.add('hidden');
+  document.getElementById('draft-note').textContent = 'Envoi du questionnaire en cours...';
+  try {
+    const { data: attempt, error: stateError } = await sb.from('attempts').select('status').eq('id', attemptId).single();
+    if (stateError || !attempt) throw new Error('Impossible de vérifier la tentative.');
+    if (attempt.status === 'cancelled') {
+      cancelledFlag = true;
+      document.getElementById('cancel-reason').textContent = "Cette tentative a été annulée par l'anti-triche.";
+      show('cancelled');
+      return;
+    }
+    if (attempt.status !== 'done') {
+      const { data: existing, error: readError } = await sb.from('responses').select('id,question_id').eq('attempt_id', attemptId);
+      if (readError) throw readError;
+      const pending = [];
+      for (const q of questions) {
+        const n = choicesByQuestion[q.id];
+        if (!Number.isInteger(n)) continue;
+        const row = { attempt_id: attemptId, session_id: sessionId, question_id: q.id, choice_index: n, correct: n === q.correct_index };
+        const previous = (existing || []).find(r => r.question_id === q.id);
+        if (previous) {
+          const { error } = await sb.from('responses').update(row).eq('id', previous.id);
+          if (error) throw error;
+        } else pending.push(row);
+      }
+      if (pending.length) {
+        const { error } = await sb.from('responses').insert(pending);
+        if (error) throw error;
+      }
+      const score = questions.filter(q => choicesByQuestion[q.id] === q.correct_index).length;
+      const { data: saved, error } = await sb.from('attempts').update({ status: 'done', score, total: questions.length, finished_at: new Date().toISOString() }).eq('id', attemptId).neq('status', 'cancelled').select('id').single();
+      if (error || !saved) throw error || new Error('Validation non confirmée.');
+    }
+    // Relire les reponses effectivement stockees, y compris apres une perte de
+    // connexion survenue juste apres la validation serveur.
+    const { data: stored, error: verifyError } = await sb.from('responses').select('question_id,choice_index').eq('attempt_id', attemptId);
+    if (verifyError) throw verifyError;
+    choicesByQuestion = {};
+    (stored || []).forEach(r => choicesByQuestion[r.question_id] = r.choice_index);
+    const score = questions.filter(q => choicesByQuestion[q.id] === q.correct_index).length;
+    finished = true;
+    document.getElementById('timer').classList.add('hidden');
+    document.getElementById('timer-alert').classList.add('hidden');
+    document.getElementById('end-title').textContent = timeUp ? 'Temps écoulé !' : 'Questionnaire validé';
+    document.getElementById('end-sub').textContent = 'Vos réponses ont été envoyées. Elles ne sont plus modifiables.';
+    renderCorrection(score);
+    try { localStorage.removeItem(draftKey()); } catch (e) { /* Sans effet sur l'envoi. */ }
+    show('end');
+    window.scrollTo(0, 0);
+  } catch (e) {
+    document.getElementById('draft-note').textContent = 'Vos choix sont verrouillés et conservés pour réessayer.';
+    document.getElementById('submit-error').textContent = "L'envoi n'a pas pu être confirmé. Vérifiez votre connexion et réessayez. Ne fermez pas cette page.";
+    document.getElementById('submit-error').classList.remove('hidden');
+    document.getElementById('retry-send').classList.remove('hidden');
+  } finally { submitting = false; }
 }
 
 // ---------- Chrono ----------
@@ -288,7 +427,7 @@ function startTimer(startedAt) {
     }
   };
   tick();
-  timerInt = setInterval(tick, 500);
+  if (!locked && !finished && !cancelledFlag) timerInt = setInterval(tick, 500);
 }
 
 // ---------- Anti-triche ----------
@@ -307,7 +446,7 @@ async function checkAway() {
   if (!awayStart) return;
   const awayMs = Date.now() - awayStart;
   awayStart = null;
-  if (finished || cancelledFlag) return;
+  if (finished || cancelledFlag || locked) return;
   if (awayMs > CONFIG.AWAY_LIMIT_MS) {
     cancelledFlag = true;
     if (timerInt) { clearInterval(timerInt); timerInt = null; }
