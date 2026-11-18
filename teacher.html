@@ -7,7 +7,6 @@
 <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,700;12..96,800&family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
 <meta name="theme-color" content="#fbf8f3">
 <link rel="stylesheet" href="style.css">
-<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 <script src="config.js"></script>
 <script src="export.js"></script>
@@ -97,7 +96,6 @@
 </main>
 
 <script>
-const sb = supabase.createClient(CONFIG.SUPABASE_URL, CONFIG.SUPABASE_ANON_KEY);
 
 // ---------- Code d'acces ----------
 const gate = document.getElementById('pin-gate');
@@ -108,17 +106,21 @@ function unlock() {
   loadQuizzes();
   loadHistory();
 }
-document.getElementById('pin-btn').onclick = () => {
+document.getElementById('pin-btn').onclick = async () => {
   const v = document.getElementById('pin').value.trim();
-  if (v === CONFIG.TEACHER_PIN) {
-    sessionStorage.setItem('teacher_ok', '1');
+  try {
+    await rpc('t_check', { p_code: v });
+    sessionStorage.setItem('teacher_code', v);
+    document.getElementById('pin').value = '';
     unlock();
-  } else {
-    document.getElementById('pin-msg').innerHTML = '<div class="msg err">Code incorrect.</div>';
+  } catch (e) {
+    document.getElementById('pin-msg').innerHTML = '<div class="msg err">' + (e.forbidden ? 'Code incorrect.' : 'Verification impossible, reessayez.') + '</div>';
   }
 };
 document.getElementById('pin').addEventListener('keydown', e => { if (e.key === 'Enter') document.getElementById('pin-btn').click(); });
-if (sessionStorage.getItem('teacher_ok') === '1') unlock();
+if (sessionStorage.getItem('teacher_code')) {
+  trpc('t_check').then(unlock).catch(() => sessionStorage.removeItem('teacher_code'));
+}
 
 // ---------- Onglets ----------
 const tabForm = document.getElementById('tab-form'), tabJson = document.getElementById('tab-json');
@@ -128,12 +130,12 @@ tabJson.onclick = () => { tabJson.classList.add('on'); tabForm.classList.remove(
 // ---------- Liste des quiz ----------
 async function loadQuizzes() {
   const box = document.getElementById('quiz-list');
-  const { data: quizzes, error } = await sb.from('quizzes').select('id,title,created_at,timer_seconds').order('created_at', { ascending: false });
+  let quizzes = null, error = null;
+  try { quizzes = (await trpc('t_overview')).quizzes; } catch (e) { error = e; }
   if (error) { box.innerHTML = '<div class="msg err">Erreur : ' + error.message + '</div>'; return; }
   if (!quizzes.length) { box.innerHTML = '<p class="sub">Aucun quiz pour le moment. Creez-en un ci-dessous.</p>'; return; }
-  const { data: qs } = await sb.from('questions').select('quiz_id');
   const counts = {};
-  (qs || []).forEach(q => counts[q.quiz_id] = (counts[q.quiz_id] || 0) + 1);
+  quizzes.forEach(q => counts[q.id] = q.n_questions);
   box.innerHTML = '';
   quizzes.forEach(q => {
     const div = document.createElement('div');
@@ -188,7 +190,8 @@ async function loadQuizzes() {
       delError.classList.add('hidden');
       delError.textContent = '';
       // Le schema Supabase fait cascader quizzes vers questions/sessions, puis sessions vers les resultats lies.
-      const { data: deleted, error } = await sb.from('quizzes').delete().eq('id', q.id).select('id');
+      let deleted = [], error = null;
+      try { const n = await trpc('t_delete_quiz', { p_id: q.id }); deleted = n > 0 ? [1] : []; } catch (e) { error = e; }
       if (error) {
         delError.textContent = 'Erreur pendant la suppression (quizzes) : ' + error.message;
         delError.classList.remove('hidden');
@@ -227,7 +230,8 @@ async function openClassPicker(quizId, quizTitle) {
   picker.scrollIntoView({ behavior: 'smooth' });
   const list = document.getElementById('class-list');
   list.innerHTML = '<p class="sub">Chargement des classes...</p>';
-  const { data: classes, error } = await sb.from('classes').select('id,name').order('name');
+  let classes = null, error = null;
+  try { classes = (await trpc('t_overview')).classes; } catch (e) { error = e; }
   if (error) { list.innerHTML = '<div class="msg err">Erreur : ' + error.message + '</div>'; return; }
   if (!classes.length) {
     list.innerHTML = '<p class="sub">Aucune classe pour le moment. Ajoutez-en une ci-dessous.</p>';
@@ -258,7 +262,8 @@ document.getElementById('add-class').onclick = async () => {
   const name = document.getElementById('new-class').value.trim();
   const msg = document.getElementById('picker-msg');
   if (!name) { msg.innerHTML = '<div class="msg err">Donnez un nom a la classe.</div>'; return; }
-  const { data, error } = await sb.from('classes').insert({ name }).select().single();
+  let data = null, error = null;
+  try { data = await trpc('t_add_class', { p_name: name }); } catch (e) { error = e; }
   if (error) { msg.innerHTML = '<div class="msg err">Erreur : ' + error.message + '</div>'; return; }
   launchInClass(data.id);
 };
@@ -266,7 +271,8 @@ document.getElementById('new-class').addEventListener('keydown', e => { if (e.ke
 
 async function launchInClass(classId) {
   if (!pickerQuizId) return;
-  const { data, error } = await sb.from('sessions').insert({ quiz_id: pickerQuizId, class_id: classId }).select().single();
+  let data = null, error = null;
+  try { data = { id: await trpc('t_create_session', { p_quiz: pickerQuizId, p_class: classId }) }; } catch (e) { error = e; }
   if (error) { document.getElementById('picker-msg').innerHTML = '<div class="msg err">Erreur : ' + error.message + '</div>'; return; }
   location.href = 'live.html?session=' + data.id;
 }
@@ -274,16 +280,15 @@ async function launchInClass(classId) {
 // ---------- Historique des sessions ----------
 async function loadHistory() {
   const box = document.getElementById('history-list');
-  const { data: sessions, error } = await sb.from('sessions').select('*').order('created_at', { ascending: false });
+  let sessions = null, error = null, ov = null;
+  try { ov = await trpc('t_overview'); sessions = ov.sessions; } catch (e) { error = e; }
   if (error) { box.innerHTML = '<div class="msg err">Erreur : ' + error.message + '</div>'; return; }
   if (!sessions.length) { box.innerHTML = '<p class="sub">Aucune session pour le moment.</p>'; return; }
-  const { data: quizzes } = await sb.from('quizzes').select('id,title');
-  const { data: classes } = await sb.from('classes').select('id,name');
-  const { data: attempts } = await sb.from('attempts').select('session_id,status');
+  const quizzes = ov.quizzes, classes = ov.classes;
   const quizById = {}, classById = {}, countBySession = {};
   (quizzes || []).forEach(q => quizById[q.id] = q.title);
   (classes || []).forEach(c => classById[c.id] = c.name);
-  (attempts || []).forEach(a => countBySession[a.session_id] = (countBySession[a.session_id] || 0) + 1);
+  sessions.forEach(s => countBySession[s.id] = s.n_attempts);
   box.innerHTML = '';
   sessions.forEach(s => {
     const quizTitle = quizById[s.quiz_id] || '(quiz supprime)';
@@ -302,7 +307,7 @@ async function loadHistory() {
     const xls = document.createElement('button');
     xls.className = 'small';
     xls.textContent = 'Exporter en Excel';
-    xls.onclick = () => exportSessionXLSX(sb, s, quizTitle, className);
+    xls.onclick = () => exportSessionXLSX(s, quizTitle, className);
     actions.appendChild(view);
     actions.appendChild(xls);
     box.appendChild(div);
@@ -380,12 +385,12 @@ function validateQuizJson(data) {
 }
 
 async function saveQuiz(title, questions, timerSeconds) {
-  const { data: quiz, error } = await sb.from('quizzes').insert({ title, timer_seconds: timerSeconds || null }).select().single();
-  if (error) return error.message;
-  const rows = questions.map((q, i) => ({ quiz_id: quiz.id, ord: i, text: q.text, choices: q.choices, correct_index: q.correct }));
-  const { error: e2 } = await sb.from('questions').insert(rows);
-  return e2 ? e2.message : null;
+  try {
+    await trpc('t_save_quiz', { p_title: title, p_timer: timerSeconds || 0, p_questions: questions.map(q => ({ text: q.text, choices: q.choices, correct: q.correct })) });
+    return null;
+  } catch (e) { return e.message; }
 }
 </script>
 </body>
 </html>
+
