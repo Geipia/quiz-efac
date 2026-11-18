@@ -11,7 +11,7 @@ Site statique (GitHub Pages) + backend Supabase. Le professeur cree un quiz, le 
 | `live.html?session=<id>` | QR code + resultats en direct + alertes anti-triche + export Excel + suppression de session ; quitter la page termine la session automatiquement |
 | `play.html?session=<id>` | Page eleve : identite, questions dans un ordre aleatoire, anti-triche, chrono visible si le quiz en a un |
 | `guide.html` | Notice a donner a Claude pour generer des quiz en JSON |
-| `config.js` | URL + cle anon Supabase, code professeur, limite anti-triche |
+| `config.js` | URL + cle anon Supabase (publique), limite anti-triche, appels RPC |
 | `export.js` | Export Excel des resultats (SheetJS), partage entre prof et live |
 
 ## Regles metier
@@ -28,16 +28,21 @@ Site statique (GitHub Pages) + backend Supabase. Le professeur cree un quiz, le 
 
 ## Base de donnees (Supabase)
 
-Tables : `quizzes` (avec `timer_seconds`, optionnel), `questions`, `classes`, `sessions` (avec `class_id`), `attempts`, `responses`, `alerts`.
-RLS active avec politiques ouvertes pour le role `anon` (usage classe).
-Publication realtime : `attempts`, `responses`, `alerts`.
+Tables : `quizzes` (avec `timer_seconds`, optionnel), `questions`, `classes`, `sessions` (avec `class_id`), `attempts`, `responses`, `alerts`, `teacher_secret` (empreinte du code professeur).
+RLS active et **aucune politique ni droit de table pour `anon`** : les tables ne sont pas lisibles ni modifiables directement. Tout passe par des fonctions SQL `SECURITY DEFINER` appelees en RPC :
+- eleves (`s_session`, `s_start`, `s_submit`, `s_cancel`) : le quiz est envoye sans les bonnes reponses, le score est calcule cote serveur, l'identifiant de tentative (uuid) fait office de jeton ;
+- professeur (`t_*`) : chaque appel envoie le code professeur, verifie cote serveur contre une empreinte salee (`teacher_secret`).
+Le suivi en direct se fait par interrogation reguliere (toutes les 4 s) de `t_session`.
 
-## Securite (v1)
+## Securite
 
-- Le code professeur (`TEACHER_PIN` dans `config.js`) est une protection legere, visible dans le code source : il empeche les eleves d'entrer par megarde, pas un attaquant motive.
-- La cle Supabase utilisee est la cle `anon` (publique par conception). Les bonnes reponses sont lisibles cote client : un eleve bricoleur pourrait les retrouver dans les devtools. Suffisant pour un usage classe, a durcir (Edge Functions / Auth) si besoin.
+- Le code professeur n'est **pas** dans le code du site : il est verifie par le serveur (fonctions `t_*`) et seule son empreinte salee est stockee en base. Il est communique au professeur separement. Pour le changer, mettre a jour la ligne de `teacher_secret` (sel + sha256(sel || code)).
+- La cle Supabase du site est la cle `anon` (publique par conception) : sans le code professeur, elle ne donne acces ni aux eleves, ni aux reponses, ni aux bonnes reponses, ni aux quiz.
+- Un eleve ne recoit jamais les bonnes reponses ; le score est calcule par le serveur.
+- Limites connues : le chrono est applique cote navigateur ; un eleve qui connait le matricule d'un camarade peut reprendre sa tentative en cours (comportement d'origine).
 
 ## Deploiement
 
 Pages statiques servies par GitHub Pages (branche `main`, racine).
 Modifier `config.js` si le projet Supabase change.
+
