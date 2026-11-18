@@ -1,8 +1,9 @@
 // Export Excel des resultats d'une session (utilise SheetJS, charge via CDN).
 // Colonnes : Nom, Prenom, Matricule, Score, Tout bon.
-async function exportSessionXLSX(sb, session, quizTitle, className) {
-  const { data: at, error } = await sb.from('attempts').select('*').eq('session_id', session.id).order('started_at');
-  if (error) { alert('Erreur export : ' + error.message); return; }
+async function exportSessionXLSX(session, quizTitle, className) {
+  let at = [];
+  try { at = (await trpc('t_session', { p_session: session.id })).attempts; }
+  catch (error) { alert('Erreur export : ' + error.message); return; }
   const rows = (at || []).map(a => {
     const done = a.status === 'done';
     const score = done
@@ -25,3 +26,4 @@ async function exportSessionXLSX(sb, session, quizTitle, className) {
   const date = session.created_at ? new Date(session.created_at).toISOString().slice(0, 10) : 'export';
   XLSX.writeFile(wb, 'resultats-' + safe(quizTitle) + '-' + safe(className || 'sans-classe') + '-' + date + '.xlsx');
 }
+
