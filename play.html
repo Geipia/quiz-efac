@@ -7,7 +7,6 @@
 <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,700;12..96,800&family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
 <meta name="theme-color" content="#fbf8f3">
 <link rel="stylesheet" href="style.css?v=final-review-1">
-<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
 <script src="config.js"></script>
 </head>
 <body>
@@ -94,7 +93,6 @@
 </main>
 
 <script>
-const sb = supabase.createClient(CONFIG.SUPABASE_URL, CONFIG.SUPABASE_ANON_KEY);
 const sessionId = new URLSearchParams(location.search).get('session');
 
 let session = null, questions = [], shuffled = [], current = 0;
@@ -127,16 +125,16 @@ function show(id) {
 
 async function boot() {
   if (!sessionId) { document.getElementById('loading').innerHTML = '<div class="msg err">Lien invalide : parametre "session" manquant.</div>'; return; }
-  const { data: sess, error } = await sb.from('sessions').select('id,quiz_id,open').eq('id', sessionId).single();
-  if (error || !sess) { document.getElementById('loading').innerHTML = '<div class="msg err">Session introuvable. Verifiez le QR code.</div>'; return; }
-  if (!sess.open) { document.getElementById('loading').innerHTML = '<div class="msg info">Cette session est terminee.</div>'; return; }
-  session = sess;
-  const { data: q } = await sb.from('quizzes').select('title,timer_seconds').eq('id', sess.quiz_id).single();
-  quizTimerSec = q && q.timer_seconds ? q.timer_seconds : null;
-  const { data: qs } = await sb.from('questions').select('id,text,choices,correct_index').eq('quiz_id', sess.quiz_id).order('ord');
-  questions = qs || [];
+  let info = null;
+  try { info = await rpc('s_session', { p_session: sessionId }); }
+  catch (e) { document.getElementById('loading').innerHTML = '<div class="msg err">Erreur de chargement. Rechargez la page.</div>'; return; }
+  if (!info) { document.getElementById('loading').innerHTML = '<div class="msg err">Session introuvable. Verifiez le QR code.</div>'; return; }
+  if (!info.open) { document.getElementById('loading').innerHTML = '<div class="msg info">Cette session est terminee.</div>'; return; }
+  session = { id: sessionId };
+  quizTimerSec = info.timer_seconds ? info.timer_seconds : null;
+  questions = info.questions || [];
   if (!questions.length) { document.getElementById('loading').innerHTML = '<div class="msg err">Ce quiz ne contient aucune question.</div>'; return; }
-  document.getElementById('join-title').textContent = q ? q.title : 'Quiz';
+  document.getElementById('join-title').textContent = info.title || 'Quiz';
   show('join');
 }
 
@@ -188,57 +186,42 @@ document.getElementById('start-btn').onclick = async () => {
   }
   document.getElementById('start-btn').disabled = true;
 
-  // Un matricule = une seule tentative par session.
-  const mat = normMatricule(matricule);
-  const { data: existing } = await sb.from('attempts').select('*').eq('session_id', sessionId);
-  const mine = (existing || []).find(a => normMatricule(a.matricule) === mat);
+  // Un matricule = une seule tentative par session (verifie cote serveur).
+  const fail = (text) => {
+    msgBox.innerHTML = '<div class="msg err"></div>';
+    msgBox.firstChild.textContent = text;
+    document.getElementById('start-btn').disabled = false;
+  };
+  let res;
+  try { res = await rpc('s_start', { p_session: sessionId, p_nom: nom, p_prenom: prenom, p_matricule: matricule }); }
+  catch (e) { fail('Erreur : ' + e.message); return; }
 
-  if (mine && mine.status === 'done') {
-    msgBox.innerHTML = '<div class="msg err">Ce matricule a deja participe a ce quiz. Il est impossible de recommencer.</div>';
-    document.getElementById('start-btn').disabled = false;
-    return;
-  }
-  if (mine && mine.status === 'cancelled') {
-    msgBox.innerHTML = '<div class="msg err">Ce matricule a ete bloque par l\'anti-triche. Il est impossible de recommencer ce quiz.</div>';
-    document.getElementById('start-btn').disabled = false;
-    return;
-  }
-  if (mine) {
-    // Reprise : garder toutes les questions accessibles, y compris les anciennes
-    // reponses envoyees par la version precedente du site.
-    identity = { nom: mine.nom, prenom: mine.prenom, matricule: mine.matricule };
-    attemptId = mine.id;
-    const { data: rs, error: resumeError } = await sb.from('responses').select('*').eq('attempt_id', attemptId);
-    if (resumeError) { msgBox.textContent = 'Reprise impossible pour le moment. Réessayez.'; document.getElementById('start-btn').disabled = false; return; }
-    (rs || []).forEach(r => choicesByQuestion[r.question_id] = r.choice_index);
-    shuffled = seededShuffle(questions, attemptId + ':questions');
-    current = 0;
+  if (res.status === 'invalid') { fail('Remplissez les trois champs.'); return; }
+  if (res.status === 'closed') { fail('Cette session est terminee.'); return; }
+  if (res.status === 'done') { fail('Ce matricule a deja participe a ce quiz. Il est impossible de recommencer.'); return; }
+  if (res.status === 'cancelled') { fail("Ce matricule a ete bloque par l'anti-triche. Il est impossible de recommencer ce quiz."); return; }
+
+  identity = { nom: res.attempt.nom, prenom: res.attempt.prenom, matricule: res.attempt.matricule };
+  attemptId = res.attempt.id;
+  // Ordre stable au rechargement et different pour chaque tentative.
+  shuffled = seededShuffle(questions, attemptId + ':questions');
+  current = 0;
+  if (res.status === 'resume') {
+    (res.responses || []).forEach(r => choicesByQuestion[r.question_id] = r.choice_index);
     restoreDraft();
     document.getElementById('resume-note').classList.remove('hidden');
     show('quiz');
     renderQuestion();
     armAntiCheat();
     if (locked) { finish(); return; }
-    startTimer(mine.started_at);
+    startTimer(res.attempt.started_at);
     return;
   }
-
-  identity = { nom, prenom, matricule };
-  const { data, error } = await sb.from('attempts').insert({ session_id: sessionId, nom, prenom, matricule }).select().single();
-  if (error) {
-    msgBox.innerHTML = '<div class="msg err">Erreur : ' + error.message + '</div>';
-    document.getElementById('start-btn').disabled = false;
-    return;
-  }
-  attemptId = data.id;
-  // Ordre stable au rechargement et different pour chaque tentative.
-  shuffled = seededShuffle(questions, attemptId + ':questions');
-  current = 0;
   show('quiz');
   renderQuestion();
   armAntiCheat();
   saveDraft();
-  startTimer(data.started_at);
+  startTimer(res.attempt.started_at);
 };
 
 function renderQuestion() {
@@ -316,42 +299,19 @@ async function finish(timeUp) {
   document.getElementById('retry-send').classList.add('hidden');
   document.getElementById('draft-note').textContent = 'Envoi du questionnaire en cours...';
   try {
-    const { data: attempt, error: stateError } = await sb.from('attempts').select('status').eq('id', attemptId).single();
-    if (stateError || !attempt) throw new Error('Impossible de vérifier la tentative.');
-    if (attempt.status === 'cancelled') {
+    const res = await rpc('s_submit', { p_attempt: attemptId, p_answers: choicesByQuestion });
+    if (res.status === 'cancelled') {
       cancelledFlag = true;
       document.getElementById('cancel-reason').textContent = "Cette tentative a été annulée par l'anti-triche.";
       show('cancelled');
       return;
     }
-    if (attempt.status !== 'done') {
-      const { data: existing, error: readError } = await sb.from('responses').select('id,question_id').eq('attempt_id', attemptId);
-      if (readError) throw readError;
-      const pending = [];
-      for (const q of questions) {
-        const n = choicesByQuestion[q.id];
-        if (!Number.isInteger(n)) continue;
-        const row = { attempt_id: attemptId, session_id: sessionId, question_id: q.id, choice_index: n, correct: n === q.correct_index };
-        const previous = (existing || []).find(r => r.question_id === q.id);
-        if (previous) {
-          const { error } = await sb.from('responses').update(row).eq('id', previous.id);
-          if (error) throw error;
-        } else pending.push(row);
-      }
-      if (pending.length) {
-        const { error } = await sb.from('responses').insert(pending);
-        if (error) throw error;
-      }
-      const score = questions.filter(q => choicesByQuestion[q.id] === q.correct_index).length;
-      const { data: saved, error } = await sb.from('attempts').update({ status: 'done', score, total: questions.length, finished_at: new Date().toISOString() }).eq('id', attemptId).neq('status', 'cancelled').select('id').single();
-      if (error || !saved) throw error || new Error('Validation non confirmée.');
-    }
+    if (res.status !== 'done') throw new Error('Validation non confirmée.');
+    // Reponses effectivement stockees cote serveur (le score n'est jamais calcule ni affiche ici).
     // Relire les reponses effectivement stockees, y compris apres une perte de
     // connexion survenue juste apres la validation serveur.
-    const { data: stored, error: verifyError } = await sb.from('responses').select('question_id,choice_index').eq('attempt_id', attemptId);
-    if (verifyError) throw verifyError;
     choicesByQuestion = {};
-    (stored || []).forEach(r => choicesByQuestion[r.question_id] = r.choice_index);
+    (res.responses || []).forEach(r => choicesByQuestion[r.question_id] = r.choice_index);
     finished = true;
     document.getElementById('timer').classList.add('hidden');
     document.getElementById('timer-alert').classList.add('hidden');
@@ -426,15 +386,7 @@ async function checkAway() {
     document.getElementById('timer').classList.add('hidden');
     document.getElementById('timer-alert').classList.add('hidden');
     const reason = 'A quitte l\'onglet ou la fenetre pendant ' + Math.round(awayMs / 1000) + ' s (limite : 3 s).';
-    await sb.from('attempts').update({ status: 'cancelled', finished_at: new Date().toISOString() }).eq('id', attemptId);
-    await sb.from('alerts').insert({
-      session_id: sessionId,
-      attempt_id: attemptId,
-      nom: identity.nom,
-      prenom: identity.prenom,
-      matricule: identity.matricule,
-      reason
-    });
+    try { await rpc('s_cancel', { p_attempt: attemptId, p_reason: reason }); } catch (e) { /* l'ecran d'annulation s'affiche quand meme */ }
     document.getElementById('cancel-reason').textContent = reason;
     show('cancelled');
   }
@@ -444,3 +396,4 @@ boot();
 </script>
 </body>
 </html>
+
