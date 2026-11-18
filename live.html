@@ -7,7 +7,6 @@
 <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,700;12..96,800&family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
 <meta name="theme-color" content="#fbf8f3">
 <link rel="stylesheet" href="style.css?v=final-review-1">
-<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcode-generator/1.4.4/qrcode.min.js"></script>
 <script src="config.js"></script>
@@ -81,7 +80,7 @@
 </main>
 
 <script>
-const sb = supabase.createClient(CONFIG.SUPABASE_URL, CONFIG.SUPABASE_ANON_KEY);
+if (!sessionStorage.getItem('teacher_code')) location.replace('teacher.html');
 const sessionId = new URLSearchParams(location.search).get('session');
 if (!sessionId) { document.getElementById('loading').innerHTML = '<div class="msg err">Parametre "session" manquant dans l\'URL.</div>'; }
 
@@ -90,21 +89,23 @@ let sessionRow = null, className = '';
 
 async function boot() {
   if (!sessionId) return;
-  const { data: sess, error } = await sb.from('sessions').select('id,quiz_id,open,class_id,created_at').eq('id', sessionId).single();
-  if (error || !sess) { document.getElementById('loading').innerHTML = '<div class="msg err">Session introuvable.</div>'; return; }
+  let d = null;
+  try { d = await trpc('t_session', { p_session: sessionId }); }
+  catch (e) {
+    if (e.forbidden) { sessionStorage.removeItem('teacher_code'); location.replace('teacher.html'); return; }
+    document.getElementById('loading').innerHTML = '<div class="msg err">Erreur de chargement. Rechargez la page.</div>'; return;
+  }
+  if (!d) { document.getElementById('loading').innerHTML = '<div class="msg err">Session introuvable.</div>'; return; }
+  const sess = d.session;
   sessionRow = sess;
   await maybeReopenAfterReload();
-  const { data: q } = await sb.from('quizzes').select('id,title,timer_seconds').eq('id', sess.quiz_id).single();
+  const q = d.quiz;
   quiz = q;
   if (q && q.timer_seconds) {
     document.getElementById('timer-info').textContent = 'Chrono : ' + (q.timer_seconds / 60) + ' minute(s) par eleve. Les reponses sont envoyees automatiquement quand le temps est ecoule.';
   }
-  if (sess.class_id) {
-    const { data: c } = await sb.from('classes').select('name').eq('id', sess.class_id).single();
-    className = c ? c.name : '';
-  }
-  const { data: qs } = await sb.from('questions').select('id,text,choices,correct_index,ord').eq('quiz_id', sess.quiz_id).order('ord');
-  questions = qs || [];
+  className = d.class_name || '';
+  questions = d.questions || [];
 
   document.getElementById('quiz-title').textContent = q.title + (className ? ' - ' + className : '');
   document.getElementById('loading').classList.add('hidden');
@@ -129,33 +130,37 @@ async function boot() {
   link.href = joinUrl.href;
   link.textContent = joinUrl.href;
 
-  // Etat initial
-  const { data: at } = await sb.from('attempts').select('*').eq('session_id', sessionId);
-  (at || []).forEach(a => attempts[a.id] = a);
-  const { data: rs } = await sb.from('responses').select('*').eq('session_id', sessionId);
-  (rs || []).forEach(r => { (responsesByAttempt[r.attempt_id] = responsesByAttempt[r.attempt_id] || []).push(r); });
-  const { data: al } = await sb.from('alerts').select('*').eq('session_id', sessionId).order('created_at');
-  alertRows = al || [];
+  // Etat initial puis rafraichissement regulier (les tables ne sont plus lisibles directement)
+  applyData(d);
   render();
+  startPolling();
+}
 
-  // Temps reel
-  sb.channel('live-' + sessionId)
-    .on('postgres_changes', { event: '*', schema: 'public', table: 'attempts', filter: 'session_id=eq.' + sessionId }, p => {
-      attempts[p.new.id] = p.new; render();
-    })
-    .on('postgres_changes', { event: '*', schema: 'public', table: 'responses', filter: 'session_id=eq.' + sessionId }, p => {
-      const r = p.eventType === 'DELETE' ? p.old : p.new;
-      if (!r.attempt_id) return;
-      const rows = responsesByAttempt[r.attempt_id] || [];
-      responsesByAttempt[r.attempt_id] = rows.filter(old => old.id !== r.id);
-      if (p.eventType !== 'DELETE') responsesByAttempt[r.attempt_id].push(r);
-      render();
-    })
-    .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'alerts', filter: 'session_id=eq.' + sessionId }, p => {
-      alertRows.push(p.new); render();
-      flashTitle();
-    })
-    .subscribe();
+let lastSnapshot = '', pollTimer = null, pollBusy = false, alertsSeen = null;
+function applyData(d) {
+  attempts = {}; responsesByAttempt = {};
+  (d.attempts || []).forEach(a => attempts[a.id] = a);
+  (d.responses || []).forEach(r => { (responsesByAttempt[r.attempt_id] = responsesByAttempt[r.attempt_id] || []).push(r); });
+  alertRows = d.alerts || [];
+  if (alertsSeen !== null && alertRows.length > alertsSeen) flashTitle();
+  alertsSeen = alertRows.length;
+  lastSnapshot = JSON.stringify([d.attempts, d.responses, d.alerts, d.session && d.session.open]);
+}
+function startPolling() {
+  if (pollTimer) return;
+  pollTimer = setInterval(async () => {
+    if (pollBusy || document.hidden) return;
+    pollBusy = true;
+    try {
+      const d = await trpc('t_session', { p_session: sessionId });
+      if (d) {
+        const snap = JSON.stringify([d.attempts, d.responses, d.alerts, d.session && d.session.open]);
+        if (snap !== lastSnapshot) { applyData(d); render(); }
+      }
+    } catch (e) {
+      if (e.forbidden) { clearInterval(pollTimer); pollTimer = null; sessionStorage.removeItem('teacher_code'); location.replace('teacher.html'); }
+    } finally { pollBusy = false; }
+  }, 4000);
 }
 
 const closeButton = document.getElementById('close-session');
@@ -177,7 +182,8 @@ document.getElementById('close-yes').onclick = async () => {
   yes.textContent = 'Terminaison...';
   closeError.classList.add('hidden');
   closeError.textContent = '';
-  const { data: ended, error } = await sb.from('sessions').update({ open: false }).eq('id', sessionId).select('id').single();
+  let ended = null, error = null;
+  try { ended = (await trpc('t_set_open', { p_session: sessionId, p_open: false })) ? { id: sessionId } : null; } catch (e) { error = e; }
   if (error || !ended) {
     closeError.textContent = 'Erreur pendant la fermeture de la session : ' + (error ? error.message : 'aucune session modifiee.');
     closeError.classList.remove('hidden');
@@ -284,21 +290,13 @@ document.getElementById('delete-yes').onclick = async () => {
   yes.disabled = true;
   yes.textContent = 'Suppression...';
   errBox.classList.add('hidden');
-  const steps = [
-    ['responses', 'session_id'],
-    ['alerts', 'session_id'],
-    ['attempts', 'session_id'],
-    ['sessions', 'id']
-  ];
-  for (const [table, col] of steps) {
-    const { error } = await sb.from(table).delete().eq(col, sessionId);
-    if (error) {
-      errBox.textContent = 'Erreur pendant la suppression (' + table + ') : ' + error.message;
-      errBox.classList.remove('hidden');
-      yes.disabled = false;
-      yes.textContent = 'Oui, supprimer definitivement';
-      return;
-    }
+  try { await trpc('t_delete_session', { p_session: sessionId }); }
+  catch (error) {
+    errBox.textContent = 'Erreur pendant la suppression : ' + error.message;
+    errBox.classList.remove('hidden');
+    yes.disabled = false;
+    yes.textContent = 'Oui, supprimer definitivement';
+    return;
   }
   location.href = 'teacher.html';
 };
@@ -319,15 +317,14 @@ function armAutoClose() {
     sessionStorage.setItem('ql-autoclose-' + sessionId, String(Date.now()));
     // fetch keepalive : seul moyen fiable d'envoyer la requete pendant pagehide
     // (sendBeacon ne permet pas les en-tetes apikey exiges par Supabase).
-    fetch(CONFIG.SUPABASE_URL + '/rest/v1/sessions?id=eq.' + sessionId, {
-      method: 'PATCH',
+    fetch(CONFIG.SUPABASE_URL + '/rest/v1/rpc/t_set_open', {
+      method: 'POST',
       headers: {
         apikey: CONFIG.SUPABASE_ANON_KEY,
         Authorization: 'Bearer ' + CONFIG.SUPABASE_ANON_KEY,
-        'Content-Type': 'application/json',
-        Prefer: 'return=minimal'
+        'Content-Type': 'application/json'
       },
-      body: JSON.stringify({ open: false }),
+      body: JSON.stringify({ p_code: sessionStorage.getItem('teacher_code') || '', p_session: sessionId, p_open: false }),
       keepalive: true
     });
   });
@@ -346,15 +343,16 @@ async function maybeReopenAfterReload() {
   // reouverture (course reseau) : on rouvre puis on reverifie a 600 ms
   // d'intervalle, jusqu'a 3 fois.
   for (let i = 0; i < 3; i++) {
-    await sb.from('sessions').update({ open: true }).eq('id', sessionId);
+    try { await trpc('t_set_open', { p_session: sessionId, p_open: true }); } catch (e) { /* nouvel essai */ }
     await new Promise(r => setTimeout(r, 600));
-    const { data: check } = await sb.from('sessions').select('open').eq('id', sessionId).single();
+    let check = null;
+    try { const s = await trpc('t_session', { p_session: sessionId }); check = s && s.session; } catch (e) { /* nouvel essai */ }
     if (check && check.open) { sessionRow.open = true; return; }
   }
 }
 
 document.getElementById('export-xls').onclick = () => {
-  exportSessionXLSX(sb, sessionRow, quiz ? quiz.title : 'quiz', className);
+  exportSessionXLSX(sessionRow, quiz ? quiz.title : 'quiz', className);
 };
 
 function flashTitle() {
@@ -414,3 +412,4 @@ boot();
 </script>
 </body>
 </html>
+
